@@ -2,14 +2,14 @@
 
 SortingHat is a simple, lightweight Python CLI tool designed to bring order to the chaos of your messy folders (especially your `Downloads` directory). It automatically categorizes and moves files into organized subdirectories based on their file extensions.
 
-## ✨ Features
+## Features
 
 - **Automated Categorization**: Sorts files into logical folders like `Documents`, `Pictures`, `Videos`, `Music`, `Compressed`, and `Torrents`.
 - **Smart Collision Handling**: If a file with the same name already exists in the destination folder, SortingHat safely renames the new file (e.g., `file (1).txt`) to ensure nothing is ever overwritten or lost.
 - **Dry Run Mode**: Safely preview what files will be moved and where, without making any actual changes to your filesystem.
 - **No External Dependencies**: Uses only standard Python libraries (`argparse`, `shutil`, `pathlib`).
 
-## 🚀 Usage
+## Usage
 
 You can run the script directly from your terminal.
 
@@ -32,7 +32,7 @@ python sortinghat.py --dry-run
 python sortinghat.py "C:\Path\To\Your\Messy\Folder" --dry-run
 ```
 
-## 📁 File Categories
+## File Categories
 
 SortingHat currently maps extensions to the following categories:
 
@@ -48,7 +48,7 @@ SortingHat currently maps extensions to the following categories:
 
 *(Note: Existing subdirectories in the target folder are ignored and not moved.)*
 
-## 🛠️ Building a Standalone Executable
+## Building a Standalone Executable
 
 If you want to run SortingHat without needing to use the Python command line directly, you can build a standalone Windows executable using PyInstaller. 
 
