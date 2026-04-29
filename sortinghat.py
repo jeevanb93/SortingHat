@@ -37,7 +37,7 @@ def handle_collision(dest_file_path):
         counter += 1
 
 def main():
-    parser = argparse.ArgumentParser(description="SortingHat - A simple tool to organizing messy folders.")
+    parser = argparse.ArgumentParser(description="SortingHat - A simple tool for organizing messy folders.")
     
     parser.add_argument("target_path", type=str, nargs='?', help="The path to the folder you want to organize.")
     parser.add_argument("--dry-run", action="store_true", help="Preview what files would be moved without actually making changes.")
@@ -56,6 +56,7 @@ def main():
         
     # Core scanning and moving logic
     moved_count = 0
+    skipped_count = 0
     for file_path in target_dir.iterdir():
         # Only process files, ignore directories
         if not file_path.is_file():
@@ -77,16 +78,26 @@ def main():
         else:
             if not dest_folder.exists():
                 dest_folder.mkdir(parents=True, exist_ok=True)
-                
+
             if final_dest_path.name != file_path.name:
                 print(f"Moving: '{file_path.name}' -> '{category}/{final_dest_path.name}' (Renamed to avoid collision)")
             else:
                 print(f"Moving: '{file_path.name}' -> '{category}/{final_dest_path.name}'")
+
+            try:
+                shutil.move(str(file_path), str(final_dest_path))
+                moved_count += 1
+            except PermissionError:
+                print(f"  [SKIPPED] '{file_path.name}' - Permission denied (file may be in use).")
+                skipped_count += 1
+            except OSError as e:
+                print(f"  [SKIPPED] '{file_path.name}' - OS error: {e}")
+                skipped_count += 1
             
-            shutil.move(str(file_path), str(final_dest_path))
-            moved_count += 1
-            
-    print(f"\nSortingHat finished! Processed {moved_count} files.")
+    if skipped_count > 0:
+        print(f"\nSortingHat finished! Moved {moved_count} file(s), skipped {skipped_count} file(s) due to errors.")
+    else:
+        print(f"\nSortingHat finished! Moved {moved_count} file(s).")
 
 if __name__ == "__main__":
     main()
