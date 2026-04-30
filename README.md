@@ -9,6 +9,16 @@ SortingHat is a simple, lightweight Python CLI tool designed to bring order to t
 - **Dry Run Mode**: Safely preview what files will be moved and where, without making any actual changes to your filesystem.
 - **No External Dependencies**: Uses only standard Python libraries (`argparse`, `shutil`, `pathlib`).
 
+## Installation
+
+You can install SortingHat as a proper command-line tool from the project root:
+
+```bash
+pip install -e .
+```
+
+After installation, the `sortinghat` command will be available directly in your terminal without needing to prefix it with `python`.
+
 ## Usage
 
 You can run the script directly from your terminal.
