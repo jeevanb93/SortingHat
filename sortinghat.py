@@ -155,18 +155,28 @@ def main():
 
     # ── Summary ───────────────────────────────────────────────────────────────
     print("-" * 60)
-    action = "Would move" if args.dry_run else "Moved"
-    print(f"\n  {action} {moved_count} file(s).\n")
 
     if category_counts:
-        print("  Breakdown:")
+        BAR_WIDTH = 20
+        max_count = max(category_counts.values())
+        action = "Would move" if args.dry_run else "Moved"
+        total = sum(category_counts.values())
+
+        print(f"\n  {action} {total} file(s).\n")
+        print(f"  {'Category':<14}  {'':20}  Count")
+        print(f"  {'-'*14}  {'-'*20}  -----")
         for cat, count in sorted(category_counts.items()):
-            bar = "#" * count
-            print(f"    {cat:<14} {bar}  ({count})")
-        print()
+            filled = round((count / max_count) * BAR_WIDTH)
+            bar = "#" * filled + "-" * (BAR_WIDTH - filled)
+            print(f"  {cat:<14}  [{bar}]  {count}")
+        print(f"  {'-'*14}  {' '*20}  -----")
+        print(f"  {'Total':<14}  {' '*20}  {total}")
+    else:
+        action = "Would move" if args.dry_run else "Moved"
+        print(f"\n  {action} 0 file(s).")
 
     if skipped_count:
-        print(f"  Skipped  : {skipped_count} file(s) due to errors.")
+        print(f"\n  Skipped  : {skipped_count} file(s) due to errors.")
     if system_skipped:
         print(f"  Ignored  : {system_skipped} system/hidden file(s).")
 
