@@ -4,10 +4,12 @@ SortingHat is a simple, lightweight Python CLI tool designed to bring order to t
 
 ## Features
 
-- **Automated Categorization**: Sorts files into logical folders like `Documents`, `Pictures`, `Videos`, `Music`, `Compressed`, and `Torrents`.
+- **Automated Categorization**: Sorts files into logical folders like `Documents`, `Pictures`, `Videos`, `Music`, `Compressed`, `Installers`, `Torrents`, and `Misc`.
 - **Smart Collision Handling**: If a file with the same name already exists in the destination folder, SortingHat safely renames the new file (e.g., `file (1).txt`) to ensure nothing is ever overwritten or lost.
 - **Dry Run Mode**: Safely preview what files will be moved and where, without making any actual changes to your filesystem.
-- **No External Dependencies**: Uses only standard Python libraries (`argparse`, `shutil`, `pathlib`).
+- **Exclude Patterns**: Skip specific files using glob patterns (e.g., `--exclude '*.tmp'`).
+- **System File Filtering**: Automatically ignores dotfiles and OS artefacts like `desktop.ini` and `Thumbs.db`.
+- **No External Dependencies**: Uses only standard Python libraries (`argparse`, `fnmatch`, `shutil`, `pathlib`).
 
 ## Installation
 
@@ -42,33 +44,40 @@ python sortinghat.py --dry-run
 python sortinghat.py "C:\Path\To\Your\Messy\Folder" --dry-run
 ```
 
+### Exclude Files
+Use `--exclude` to skip files matching a glob pattern. The flag can be repeated to add multiple patterns:
+```bash
+python sortinghat.py --exclude "*.tmp"
+python sortinghat.py --exclude "*.tmp" --exclude "Thumbs*"
+```
+
 ## File Categories
 
-SortingHat currently maps extensions to the following categories:
+SortingHat maps extensions to the following categories:
 
 | Category | File Extensions |
 | :--- | :--- |
-| **Compressed** | `.zip`, `.rar`, `.7z`, `.tar`, `.gz` |
-| **Documents** | `.pdf`, `.docx`, `.doc`, `.txt`, `.xlsx`, `.xls`, `.pptx`, `.ppt`, `.csv` |
-| **Music** | `.mp3`, `.wav`, `.aac`, `.flac` |
-| **Pictures** | `.jpg`, `.jpeg`, `.png`, `.gif`, `.svg`, `.bmp`, `.heic` |
-| **Videos** | `.mp4`, `.mkv`, `.avi`, `.mov`, `.wmv`, `.webm` |
+| **Compressed** | `.zip`, `.rar`, `.7z`, `.tar`, `.gz`, `.bz2`, `.xz`, `.zst` |
+| **Documents** | `.pdf`, `.docx`, `.doc`, `.txt`, `.xlsx`, `.xls`, `.pptx`, `.ppt`, `.csv`, `.epub`, `.odt`, `.rtf`, `.md`, `.json`, `.xml`, `.pages` |
+| **Installers** | `.exe`, `.msi`, `.dmg`, `.pkg`, `.deb`, `.rpm`, `.appimage` |
+| **Music** | `.mp3`, `.wav`, `.aac`, `.flac`, `.ogg`, `.opus`, `.m4a`, `.wma`, `.aiff` |
+| **Pictures** | `.jpg`, `.jpeg`, `.png`, `.gif`, `.svg`, `.bmp`, `.heic`, `.tiff`, `.tif`, `.webp`, `.ico`, `.raw`, `.cr2`, `.nef` |
+| **Videos** | `.mp4`, `.mkv`, `.avi`, `.mov`, `.wmv`, `.webm`, `.m4v`, `.flv` |
 | **Torrents** | `.torrent` |
-| **Misc** | Any file extension not listed above will go here. |
+| **Misc** | Any extension not listed above. |
 
-*(Note: Existing subdirectories in the target folder are ignored and not moved.)*
+*(Note: Existing subdirectories in the target folder, dotfiles, and OS system files are automatically ignored.)*
 
 ## Building a Standalone Executable
 
-If you want to run SortingHat without needing to use the Python command line directly, you can build a standalone Windows executable using PyInstaller. 
+If you want to run SortingHat without needing Python installed, you can build a standalone Windows executable using PyInstaller.
 
 1. Install PyInstaller:
    ```bash
    pip install pyinstaller
    ```
-2. Build the `.exe` (a `SortingHat.spec` file may be used if already generated, otherwise run):
+2. Build the `.exe`:
    ```bash
    pyinstaller --onefile sortinghat.py
    ```
-3. Your new `sortinghat.exe` will be available in the `dist` folder. 
-
+3. Your new `sortinghat.exe` will be available in the `dist` folder. The terminal window will stay open after the run completes, prompting you to press Enter before closing.
