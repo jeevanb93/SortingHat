@@ -1,0 +1,4 @@
+{
+    "Code": [".py", ".js", ".ts", ".html", ".css", ".sql"],
+    "Music": [".mid", ".midi"]
+}
