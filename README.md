@@ -7,7 +7,10 @@ SortingHat is a simple, lightweight Python CLI tool designed to bring order to t
 - **Automated Categorization**: Sorts files into logical folders like `Documents`, `Pictures`, `Videos`, `Music`, `Compressed`, `Installers`, `Torrents`, and `Misc`.
 - **Smart Collision Handling**: If a file with the same name already exists in the destination folder, SortingHat safely renames the new file (e.g., `file (1).txt`) to ensure nothing is ever overwritten or lost.
 - **Dry Run Mode**: Safely preview what files will be moved and where, without making any actual changes to your filesystem.
+- **Undo Support**: Reverse the last sorting operation effortlessly in case of a mistake.
+- **Custom Configuration**: Use a JSON file to add new categories or map additional file extensions.
 - **Exclude Patterns**: Skip specific files using glob patterns (e.g., `--exclude '*.tmp'`).
+- **Adjustable Verbosity**: Run silently with `--quiet` or get detailed logs with `--verbose`.
 - **System File Filtering**: Automatically ignores dotfiles and OS artefacts like `desktop.ini` and `Thumbs.db`.
 - **No External Dependencies**: Uses only standard Python libraries (`argparse`, `fnmatch`, `shutil`, `pathlib`).
 
@@ -49,6 +52,36 @@ Use `--exclude` to skip files matching a glob pattern. The flag can be repeated 
 ```bash
 python sortinghat.py --exclude "*.tmp"
 python sortinghat.py --exclude "*.tmp" --exclude "Thumbs*"
+```
+
+### Undo Last Sort
+If you make a mistake, you can undo the last live run in a folder. SortingHat saves a hidden `.sortinghat_undo.json` log which allows it to move files back to their original locations:
+```bash
+python sortinghat.py --undo
+```
+
+### Custom Configuration
+You can define your own file categories or add new extensions to existing categories using a JSON config file. 
+
+Create a `config.json` (see `example_config.json` for reference):
+```json
+{
+    "Code": [".py", ".js", ".html", ".css"],
+    "Music": [".mid"]
+}
+```
+Then run SortingHat with the `--config` flag:
+```bash
+python sortinghat.py --config config.json
+```
+
+### Verbosity Options
+By default, SortingHat prints each file it moves. 
+- Use `--quiet` to suppress per-file output and only see the final summary table.
+- Use `--verbose` to see additional details, such as ignored system files and excluded files.
+```bash
+python sortinghat.py --quiet
+python sortinghat.py --verbose
 ```
 
 ## File Categories
