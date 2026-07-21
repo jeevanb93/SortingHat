@@ -136,11 +136,14 @@ python sortinghat.py --verbose
 ### What a Run Looks Like
 
 ```
-  Moving  Council_Rate_Payment_May_2026.pdf
-       -> Documents/Council_Rate_Payment_May_2026.pdf
+  Moving  annual-report.pdf
+       -> Documents/annual-report.pdf
 
-  Moving  Hogwarts Legacy.jpg
-       -> Pictures/Hogwarts Legacy.jpg
+  Moving  holiday-photo.jpg
+       -> Pictures/holiday-photo.jpg
+
+  Moving  invoice.pdf
+       -> Documents/invoice (1).pdf (renamed to avoid collision)
 
 ------------------------------------------------------------
 
@@ -157,6 +160,8 @@ python sortinghat.py --verbose
   --------------                        -----
   Total                                 69
 ```
+
+The bars are scaled to the largest category, so you can see at a glance where the bulk of the clutter is.
 
 ---
 
