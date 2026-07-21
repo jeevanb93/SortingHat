@@ -6,16 +6,25 @@ from pathlib import Path
 import pytest
 
 from sortinghat import (
+    GREEN,
+    RESET,
     Verbosity,
     SortResult,
     build_ext_map,
+    colourise,
+    describe_undo_state,
     get_category,
     handle_collision,
     is_excluded,
     is_system_file,
     load_config,
+    prune_empty_dirs,
+    read_undo_runs,
+    run_interactive_menu,
     sort_directory,
+    supports_colour,
     undo_last_sort,
+    write_undo_runs,
     UNDO_LOG_FILENAME,
 )
 
@@ -274,13 +283,267 @@ class TestSortDirectory:
         log_path = tmp_path / UNDO_LOG_FILENAME
         assert log_path.exists()
         log = json.loads(log_path.read_text())
-        assert len(log["moves"]) == 1
-        assert log["moves"][0]["src"].endswith("doc.pdf")
+        assert len(log["runs"]) == 1
+        assert log["runs"][0]["moves"][0]["src"].endswith("doc.pdf")
 
     def test_undo_log_not_written_when_nothing_moved(self, tmp_path):
         # Empty directory — nothing to move
         sort_directory(tmp_path, verbosity=Verbosity.QUIET)
         assert not (tmp_path / UNDO_LOG_FILENAME).exists()
+
+    def test_second_run_appends_instead_of_overwriting(self, tmp_path):
+        self._make_files(tmp_path, ["doc.pdf"])
+        sort_directory(tmp_path, verbosity=Verbosity.QUIET)
+        self._make_files(tmp_path, ["photo.jpg"])
+        sort_directory(tmp_path, verbosity=Verbosity.QUIET)
+
+        runs = read_undo_runs(tmp_path / UNDO_LOG_FILENAME)
+        assert len(runs) == 2
+        assert runs[0]["moves"][0]["src"].endswith("doc.pdf")
+        assert runs[1]["moves"][0]["src"].endswith("photo.jpg")
+
+
+# ── Undo log helpers ──────────────────────────────────────────────────────────
+
+class TestUndoLogHelpers:
+    def test_missing_log_returns_empty_list(self, tmp_path):
+        assert read_undo_runs(tmp_path / UNDO_LOG_FILENAME) == []
+
+    def test_legacy_single_run_format_is_read_as_one_run(self, tmp_path):
+        log_path = tmp_path / UNDO_LOG_FILENAME
+        log_path.write_text(json.dumps({
+            "timestamp": "2026-01-01T00:00:00+00:00",
+            "target": str(tmp_path),
+            "moves": [{"src": "a.pdf", "dst": "Documents/a.pdf"}],
+        }))
+        runs = read_undo_runs(log_path)
+        assert len(runs) == 1
+        assert runs[0]["moves"][0]["src"] == "a.pdf"
+
+    def test_corrupt_log_is_ignored_rather_than_raising(self, tmp_path):
+        log_path = tmp_path / UNDO_LOG_FILENAME
+        log_path.write_text("{ not valid json }")
+        assert read_undo_runs(log_path) == []
+
+    def test_writing_empty_run_list_removes_the_log(self, tmp_path):
+        log_path = tmp_path / UNDO_LOG_FILENAME
+        log_path.write_text("{}")
+        write_undo_runs(log_path, [])
+        assert not log_path.exists()
+
+    def test_round_trip_preserves_runs(self, tmp_path):
+        log_path = tmp_path / UNDO_LOG_FILENAME
+        runs = [{"timestamp": "t1", "target": "x", "moves": []},
+                {"timestamp": "t2", "target": "x", "moves": []}]
+        write_undo_runs(log_path, runs)
+        assert read_undo_runs(log_path) == runs
+
+
+# ── prune_empty_dirs ──────────────────────────────────────────────────────────
+
+class TestPruneEmptyDirs:
+    def test_empty_child_directory_is_removed(self, tmp_path):
+        child = tmp_path / "Documents"
+        child.mkdir()
+        assert prune_empty_dirs({child}, tmp_path, Verbosity.QUIET) == 1
+        assert not child.exists()
+
+    def test_non_empty_directory_is_kept(self, tmp_path):
+        child = tmp_path / "Documents"
+        child.mkdir()
+        (child / "leftover.pdf").write_text("still here")
+        assert prune_empty_dirs({child}, tmp_path, Verbosity.QUIET) == 0
+        assert child.exists()
+
+    def test_target_directory_itself_is_never_removed(self, tmp_path):
+        assert prune_empty_dirs({tmp_path}, tmp_path, Verbosity.QUIET) == 0
+        assert tmp_path.exists()
+
+    def test_directories_outside_target_are_left_alone(self, tmp_path):
+        outsider = tmp_path / "Documents" / "Nested"
+        outsider.mkdir(parents=True)
+        assert prune_empty_dirs({outsider}, tmp_path, Verbosity.QUIET) == 0
+        assert outsider.exists()
+
+    def test_relative_target_still_matches_absolute_candidates(self, tmp_path, monkeypatch):
+        # Undo logs hold absolute paths while the target may be given as '.',
+        # and Path equality is textual — both sides must be resolved first.
+        child = tmp_path / "Videos"
+        child.mkdir()
+        monkeypatch.chdir(tmp_path)
+        assert prune_empty_dirs({child.resolve()}, Path("."), Verbosity.QUIET) == 1
+        assert not child.exists()
+
+
+# ── describe_undo_state ───────────────────────────────────────────────────────
+
+class TestDescribeUndoState:
+    def _make_files(self, directory: Path, names: list[str]) -> None:
+        for name in names:
+            (directory / name).write_text(f"content of {name}")
+
+    def test_no_log_reports_nothing_to_undo(self, tmp_path):
+        assert describe_undo_state(tmp_path) == "nothing to undo"
+
+    def test_single_run_reports_file_count(self, tmp_path):
+        self._make_files(tmp_path, ["doc.pdf", "photo.jpg"])
+        sort_directory(tmp_path, verbosity=Verbosity.QUIET)
+        assert describe_undo_state(tmp_path) == "2 file(s) from the last sort"
+
+    def test_stacked_runs_mention_the_history_behind_them(self, tmp_path):
+        self._make_files(tmp_path, ["doc.pdf"])
+        sort_directory(tmp_path, verbosity=Verbosity.QUIET)
+        self._make_files(tmp_path, ["photo.jpg"])
+        sort_directory(tmp_path, verbosity=Verbosity.QUIET)
+        assert describe_undo_state(tmp_path) == "1 file(s) from the last sort, 1 older run(s) behind it"
+
+
+# ── Colour output ─────────────────────────────────────────────────────────────
+
+class TestColourOutput:
+    def test_colourise_wraps_text_when_supported(self, monkeypatch):
+        monkeypatch.setattr("sortinghat.supports_colour", lambda: True)
+        assert colourise("Sort now") == f"{GREEN}Sort now{RESET}"
+
+    def test_colourise_returns_plain_text_when_unsupported(self, monkeypatch):
+        monkeypatch.setattr("sortinghat.supports_colour", lambda: False)
+        assert colourise("Sort now") == "Sort now"
+
+    def test_no_colour_when_output_is_not_a_terminal(self, monkeypatch):
+        monkeypatch.delenv("NO_COLOR", raising=False)
+        monkeypatch.setattr("sys.stdout.isatty", lambda: False, raising=False)
+        supports_colour.cache_clear()
+        assert supports_colour() is False
+        supports_colour.cache_clear()
+
+    def test_no_color_env_var_disables_colour(self, monkeypatch):
+        monkeypatch.setenv("NO_COLOR", "1")
+        monkeypatch.setattr("sys.stdout.isatty", lambda: True, raising=False)
+        supports_colour.cache_clear()
+        assert supports_colour() is False
+        supports_colour.cache_clear()
+
+
+# ── run_interactive_menu ──────────────────────────────────────────────────────
+
+class TestInteractiveMenu:
+    def _make_files(self, directory: Path, names: list[str]) -> None:
+        for name in names:
+            (directory / name).write_text(f"content of {name}")
+
+    def _answer(self, monkeypatch, responses: list[str]) -> None:
+        """Feed *responses* to input() in order."""
+        queue = list(responses)
+        monkeypatch.setattr("builtins.input", lambda *a, **k: queue.pop(0))
+
+    def test_exit_option_leaves_files_untouched(self, tmp_path, monkeypatch):
+        self._make_files(tmp_path, ["doc.pdf"])
+        self._answer(monkeypatch, ["0"])
+        run_interactive_menu(tmp_path, Verbosity.QUIET)
+        assert (tmp_path / "doc.pdf").exists()
+        assert not (tmp_path / "Documents").exists()
+
+    def test_preview_option_does_not_move_files(self, tmp_path, monkeypatch):
+        self._make_files(tmp_path, ["doc.pdf"])
+        self._answer(monkeypatch, ["1", "0"])
+        run_interactive_menu(tmp_path, Verbosity.QUIET)
+        assert (tmp_path / "doc.pdf").exists()
+        assert not (tmp_path / "Documents").exists()
+
+    def test_sort_option_moves_files(self, tmp_path, monkeypatch):
+        self._make_files(tmp_path, ["doc.pdf"])
+        self._answer(monkeypatch, ["2", "0"])
+        run_interactive_menu(tmp_path, Verbosity.QUIET)
+        assert (tmp_path / "Documents" / "doc.pdf").exists()
+
+    def test_sort_then_undo_round_trips(self, tmp_path, monkeypatch):
+        self._make_files(tmp_path, ["doc.pdf"])
+        self._answer(monkeypatch, ["2", "4", "0"])
+        run_interactive_menu(tmp_path, Verbosity.QUIET)
+        assert (tmp_path / "doc.pdf").exists()
+        assert not (tmp_path / "Documents").exists()
+
+    def test_undo_preview_keeps_log_and_files(self, tmp_path, monkeypatch):
+        self._make_files(tmp_path, ["doc.pdf"])
+        self._answer(monkeypatch, ["2", "3", "0"])
+        run_interactive_menu(tmp_path, Verbosity.QUIET)
+        assert (tmp_path / "Documents" / "doc.pdf").exists()
+        assert (tmp_path / UNDO_LOG_FILENAME).exists()
+
+    def test_change_target_redirects_the_next_sort(self, tmp_path, monkeypatch):
+        other = tmp_path / "elsewhere"
+        other.mkdir()
+        self._make_files(other, ["doc.pdf"])
+        self._answer(monkeypatch, ["5", str(other), "2", "0"])
+        run_interactive_menu(tmp_path, Verbosity.QUIET)
+        assert (other / "Documents" / "doc.pdf").exists()
+
+    def test_change_target_to_bad_path_keeps_current(self, tmp_path, monkeypatch, capsys):
+        self._make_files(tmp_path, ["doc.pdf"])
+        self._answer(monkeypatch, ["5", str(tmp_path / "nope"), "2", "0"])
+        run_interactive_menu(tmp_path, Verbosity.QUIET)
+        assert "keeping the current target" in capsys.readouterr().out
+        assert (tmp_path / "Documents" / "doc.pdf").exists()
+
+    def test_blank_target_answer_keeps_current(self, tmp_path, monkeypatch):
+        self._make_files(tmp_path, ["doc.pdf"])
+        self._answer(monkeypatch, ["5", "", "2", "0"])
+        run_interactive_menu(tmp_path, Verbosity.QUIET)
+        assert (tmp_path / "Documents" / "doc.pdf").exists()
+
+    def test_quoted_target_path_is_accepted(self, tmp_path, monkeypatch):
+        other = tmp_path / "with space"
+        other.mkdir()
+        self._make_files(other, ["doc.pdf"])
+        self._answer(monkeypatch, ["5", f'"{other}"', "2", "0"])
+        run_interactive_menu(tmp_path, Verbosity.QUIET)
+        assert (other / "Documents" / "doc.pdf").exists()
+
+    def test_invalid_choice_reprompts(self, tmp_path, monkeypatch, capsys):
+        self._make_files(tmp_path, ["doc.pdf"])
+        self._answer(monkeypatch, ["9", "banana", "0"])
+        run_interactive_menu(tmp_path, Verbosity.QUIET)
+        out = capsys.readouterr().out
+        assert "'9' is not one of the options" in out
+        assert "'banana' is not one of the options" in out
+        assert (tmp_path / "doc.pdf").exists()
+
+    def test_ctrl_c_at_the_prompt_exits_cleanly(self, tmp_path, monkeypatch, capsys):
+        def interrupt(*a, **k):
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr("builtins.input", interrupt)
+        run_interactive_menu(tmp_path, Verbosity.QUIET)  # must not raise
+        assert "Cancelled" in capsys.readouterr().out
+
+    def test_menu_options_are_green_when_colour_is_supported(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.setattr("sortinghat.supports_colour", lambda: True)
+        self._answer(monkeypatch, ["0"])
+        run_interactive_menu(tmp_path, Verbosity.QUIET)
+        out = capsys.readouterr().out
+        assert f"{GREEN}[2]  Sort now{RESET}" in out
+        assert f"{GREEN}[0]  Exit{RESET}" in out
+
+    def test_menu_options_are_plain_when_colour_is_unsupported(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.setattr("sortinghat.supports_colour", lambda: False)
+        self._answer(monkeypatch, ["0"])
+        run_interactive_menu(tmp_path, Verbosity.QUIET)
+        out = capsys.readouterr().out
+        assert "[2]  Sort now" in out
+        assert "\033[" not in out  # no escape codes leak into piped output
+
+    def test_menu_honours_custom_ext_map(self, tmp_path, monkeypatch):
+        self._make_files(tmp_path, ["script.py"])
+        self._answer(monkeypatch, ["2", "0"])
+        run_interactive_menu(tmp_path, Verbosity.QUIET, ext_map=build_ext_map({"Code": [".py"]}))
+        assert (tmp_path / "Code" / "script.py").exists()
+
+    def test_menu_honours_exclude_patterns(self, tmp_path, monkeypatch):
+        self._make_files(tmp_path, ["doc.pdf", "temp.tmp"])
+        self._answer(monkeypatch, ["2", "0"])
+        run_interactive_menu(tmp_path, Verbosity.QUIET, exclude_patterns=["*.tmp"])
+        assert (tmp_path / "temp.tmp").exists()
+        assert (tmp_path / "Documents" / "doc.pdf").exists()
 
 
 # ── undo_last_sort ────────────────────────────────────────────────────────────
@@ -329,3 +592,79 @@ class TestUndoLastSort:
 
         # Second undo should say no log found, not raise
         undo_last_sort(tmp_path, Verbosity.QUIET)  # must not raise
+
+    def test_undo_removes_emptied_category_folders(self, tmp_path):
+        self._make_files(tmp_path, ["doc.pdf", "photo.jpg"])
+        sort_directory(tmp_path, verbosity=Verbosity.QUIET)
+        undo_last_sort(tmp_path, Verbosity.QUIET)
+
+        assert not (tmp_path / "Documents").exists()
+        assert not (tmp_path / "Pictures").exists()
+
+    def test_undo_keeps_category_folder_that_still_has_files(self, tmp_path):
+        self._make_files(tmp_path, ["doc.pdf"])
+        sort_directory(tmp_path, verbosity=Verbosity.QUIET)
+        (tmp_path / "Documents" / "unrelated.pdf").write_text("not ours")
+        undo_last_sort(tmp_path, Verbosity.QUIET)
+
+        assert (tmp_path / "Documents" / "unrelated.pdf").exists()
+
+    # ── Undo stack ─────────────────────────────────────────────────────────────
+
+    def test_undo_walks_back_one_run_at_a_time(self, tmp_path):
+        self._make_files(tmp_path, ["doc.pdf"])
+        sort_directory(tmp_path, verbosity=Verbosity.QUIET)
+        self._make_files(tmp_path, ["photo.jpg"])
+        sort_directory(tmp_path, verbosity=Verbosity.QUIET)
+
+        # First undo reverses only the most recent run
+        undo_last_sort(tmp_path, Verbosity.QUIET)
+        assert (tmp_path / "photo.jpg").exists()
+        assert (tmp_path / "Documents" / "doc.pdf").exists()
+        assert (tmp_path / UNDO_LOG_FILENAME).exists()  # earlier run still recorded
+
+        # Second undo reverses the run before it, then clears the log
+        undo_last_sort(tmp_path, Verbosity.QUIET)
+        assert (tmp_path / "doc.pdf").exists()
+        assert not (tmp_path / UNDO_LOG_FILENAME).exists()
+
+    def test_undo_reads_legacy_log_format(self, tmp_path):
+        self._make_files(tmp_path, ["doc.pdf"])
+        sort_directory(tmp_path, verbosity=Verbosity.QUIET)
+
+        # Rewrite the log in the pre-v2 single-run shape
+        log_path = tmp_path / UNDO_LOG_FILENAME
+        run = json.loads(log_path.read_text())["runs"][0]
+        log_path.write_text(json.dumps(run))
+
+        undo_last_sort(tmp_path, Verbosity.QUIET)
+        assert (tmp_path / "doc.pdf").exists()
+        assert not log_path.exists()
+
+    # ── Undo dry run ───────────────────────────────────────────────────────────
+
+    def test_undo_dry_run_moves_nothing_and_keeps_log(self, tmp_path):
+        self._make_files(tmp_path, ["doc.pdf"])
+        sort_directory(tmp_path, verbosity=Verbosity.QUIET)
+        undo_last_sort(tmp_path, Verbosity.QUIET, dry_run=True)
+
+        assert (tmp_path / "Documents" / "doc.pdf").exists()
+        assert not (tmp_path / "doc.pdf").exists()
+        assert (tmp_path / UNDO_LOG_FILENAME).exists()
+
+    def test_undo_dry_run_reports_what_would_be_restored(self, tmp_path, capsys):
+        self._make_files(tmp_path, ["doc.pdf"])
+        sort_directory(tmp_path, verbosity=Verbosity.QUIET)
+        undo_last_sort(tmp_path, Verbosity.NORMAL, dry_run=True)
+
+        captured = capsys.readouterr()
+        assert "Would restore 1 file(s)." in captured.out
+        assert "doc.pdf" in captured.out
+
+    def test_undo_after_dry_run_still_works(self, tmp_path):
+        self._make_files(tmp_path, ["doc.pdf"])
+        sort_directory(tmp_path, verbosity=Verbosity.QUIET)
+        undo_last_sort(tmp_path, Verbosity.QUIET, dry_run=True)
+        undo_last_sort(tmp_path, Verbosity.QUIET)
+
+        assert (tmp_path / "doc.pdf").exists()
