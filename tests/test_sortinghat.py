@@ -13,6 +13,8 @@ from sortinghat import (
     build_ext_map,
     colourise,
     describe_undo_state,
+    is_within,
+    sanitize_category,
     get_category,
     handle_collision,
     is_excluded,
@@ -27,6 +29,14 @@ from sortinghat import (
     write_undo_runs,
     UNDO_LOG_FILENAME,
 )
+
+
+def _symlink_or_skip(link: Path, target: Path) -> None:
+    """Create a symlink, or skip the test where the OS/user won't allow it (e.g. Windows without privilege)."""
+    try:
+        link.symlink_to(target)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlink creation is not permitted in this environment")
 
 
 # ── get_category ──────────────────────────────────────────────────────────────
@@ -132,6 +142,15 @@ class TestHandleCollision:
         result = handle_collision(dest, occupied)
         assert result == tmp_path / "file (2).txt"
 
+    def test_dangling_symlink_counts_as_occupied(self, tmp_path):
+        # A broken symlink at the destination must not be treated as free, or
+        # shutil.move could overwrite it on POSIX. lexists (not exists) catches it.
+        dest = tmp_path / "file.txt"
+        _symlink_or_skip(dest, tmp_path / "does-not-exist")
+        assert not dest.exists()          # broken link: exists() is False...
+        result = handle_collision(dest)   # ...but handle_collision must still avoid it
+        assert result == tmp_path / "file (1).txt"
+
 
 # ── build_ext_map ─────────────────────────────────────────────────────────────
 
@@ -183,6 +202,82 @@ class TestLoadConfig:
         with pytest.raises(SystemExit):
             load_config(bad_file)
 
+    def test_string_value_is_rejected_not_iterated(self, tmp_path):
+        # {"Code": "py"} must error rather than silently become extensions 'p','y'.
+        bad_file = tmp_path / "bad.json"
+        bad_file.write_text(json.dumps({"Code": "py"}))
+        with pytest.raises(SystemExit):
+            load_config(bad_file)
+
+    def test_extension_without_leading_dot_is_rejected(self, tmp_path):
+        bad_file = tmp_path / "bad.json"
+        bad_file.write_text(json.dumps({"Code": ["py"]}))
+        with pytest.raises(SystemExit):
+            load_config(bad_file)
+
+    def test_non_string_extension_is_rejected(self, tmp_path):
+        bad_file = tmp_path / "bad.json"
+        bad_file.write_text(json.dumps({"Code": [123]}))
+        with pytest.raises(SystemExit):
+            load_config(bad_file)
+
+    def test_traversal_category_name_is_rejected(self, tmp_path):
+        bad_file = tmp_path / "bad.json"
+        bad_file.write_text(json.dumps({"../../evil": [".py"]}))
+        with pytest.raises(SystemExit):
+            load_config(bad_file)
+
+    def test_absolute_category_name_is_rejected(self, tmp_path):
+        bad_file = tmp_path / "bad.json"
+        bad_file.write_text(json.dumps({"C:/Windows/Temp": [".py"]}))
+        with pytest.raises(SystemExit):
+            load_config(bad_file)
+
+
+# ── sanitize_category ─────────────────────────────────────────────────────────
+
+class TestSanitizeCategory:
+    def test_plain_names_pass_through(self):
+        assert sanitize_category("Code") == "Code"
+        assert sanitize_category("My Documents") == "My Documents"
+
+    def test_surrounding_whitespace_is_trimmed(self):
+        assert sanitize_category("  Code  ") == "Code"
+
+    @pytest.mark.parametrize("bad", [
+        "", "   ", "..", "../../evil", "a/b", "a\\b",
+        "C:/Windows", "C:\\Windows", "name:stream", "a*b", "a?b", "a|b", "a<b", 'a"b',
+    ])
+    def test_dangerous_names_raise(self, bad):
+        with pytest.raises(ValueError):
+            sanitize_category(bad)
+
+    def test_build_ext_map_rejects_dangerous_category(self):
+        with pytest.raises(ValueError):
+            build_ext_map({"../escape": [".py"]})
+
+
+# ── is_within ─────────────────────────────────────────────────────────────────
+
+class TestIsWithin:
+    def test_child_inside_parent(self, tmp_path):
+        child = tmp_path / "Documents" / "a.pdf"
+        assert is_within(child, tmp_path)
+
+    def test_parent_itself_counts_as_within(self, tmp_path):
+        assert is_within(tmp_path, tmp_path)
+
+    def test_sibling_is_not_within(self, tmp_path):
+        parent = tmp_path / "target"
+        parent.mkdir()
+        outside = tmp_path / "elsewhere" / "a.pdf"
+        assert not is_within(outside, parent)
+
+    def test_parent_traversal_is_not_within(self, tmp_path):
+        parent = tmp_path / "target"
+        parent.mkdir()
+        assert not is_within(parent / ".." / ".." / "etc", parent)
+
 
 # ── sort_directory ────────────────────────────────────────────────────────────
 
@@ -207,6 +302,18 @@ class TestSortDirectory:
         self._make_files(tmp_path, ["script.xyz"])
         sort_directory(tmp_path, verbosity=Verbosity.QUIET)
         assert (tmp_path / "Misc" / "script.xyz").exists()
+
+    def test_symlinks_are_skipped_not_moved(self, tmp_path):
+        real = tmp_path / "outside.pdf"
+        real.write_text("sensitive")
+        (tmp_path.parent / "target_real").mkdir(exist_ok=True)
+        link = tmp_path / "shortcut.pdf"
+        _symlink_or_skip(link, real)
+
+        result = sort_directory(tmp_path, verbosity=Verbosity.QUIET)
+        assert link.is_symlink()                       # left in place
+        assert not (tmp_path / "Documents" / "shortcut.pdf").exists()
+        assert result.system_ignored >= 1
 
     # ── Dry run ────────────────────────────────────────────────────────────────
 
@@ -337,6 +444,13 @@ class TestUndoLogHelpers:
                 {"timestamp": "t2", "target": "x", "moves": []}]
         write_undo_runs(log_path, runs)
         assert read_undo_runs(log_path) == runs
+
+    def test_oversized_log_is_ignored(self, tmp_path, monkeypatch):
+        import sortinghat
+        monkeypatch.setattr(sortinghat, "MAX_UNDO_LOG_BYTES", 10)
+        log_path = tmp_path / UNDO_LOG_FILENAME
+        log_path.write_text(json.dumps({"version": 2, "runs": [{"moves": []}]}))  # > 10 bytes
+        assert read_undo_runs(log_path) == []
 
 
 # ── prune_empty_dirs ──────────────────────────────────────────────────────────
@@ -668,3 +782,46 @@ class TestUndoLastSort:
         undo_last_sort(tmp_path, Verbosity.QUIET)
 
         assert (tmp_path / "doc.pdf").exists()
+
+    # ── Confinement (security) ─────────────────────────────────────────────────
+
+    def test_undo_refuses_to_restore_outside_target(self, tmp_path):
+        # A poisoned undo log must not be able to fling a file outside the target.
+        target = tmp_path / "downloads"
+        target.mkdir()
+        outside = tmp_path / "outside"
+        outside.mkdir()
+
+        victim = target / "Documents" / "secret.pdf"
+        victim.parent.mkdir()
+        victim.write_text("data")
+        escape = outside / "stolen.pdf"
+
+        log = target / UNDO_LOG_FILENAME
+        write_undo_runs(log, [{
+            "timestamp": "t", "target": str(target),
+            "moves": [{"src": str(escape), "dst": str(victim)}],
+        }])
+
+        undo_last_sort(target, Verbosity.QUIET)
+
+        assert not escape.exists()   # the escape was refused
+        assert victim.exists()       # the real file is untouched
+        assert not log.exists()      # the run is still consumed, not left to jam the stack
+
+    def test_undo_blocked_count_is_reported(self, tmp_path, capsys):
+        target = tmp_path / "downloads"
+        target.mkdir()
+        victim = target / "Documents" / "secret.pdf"
+        victim.parent.mkdir()
+        victim.write_text("data")
+
+        log = target / UNDO_LOG_FILENAME
+        write_undo_runs(log, [{
+            "timestamp": "t", "target": str(target),
+            "moves": [{"src": str(tmp_path / "outside" / "x.pdf"), "dst": str(victim)}],
+        }])
+
+        undo_last_sort(target, Verbosity.NORMAL)
+        out = capsys.readouterr().out
+        assert "Blocked" in out

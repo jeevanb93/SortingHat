@@ -42,6 +42,15 @@ SYSTEM_FILES: set[str] = {"desktop.ini", "thumbs.db"}
 UNDO_LOG_FILENAME = ".sortinghat_undo.json"
 UNDO_LOG_VERSION = 2
 
+# A sane ceiling on the undo log so a crafted or corrupt file can't force an
+# unbounded read into memory. A real log is a few hundred bytes per move.
+MAX_UNDO_LOG_BYTES = 50 * 1024 * 1024
+
+# Characters that must never appear in a category name: path separators, the
+# Windows drive colon, and the reserved filename characters. A category becomes
+# a sub-folder, so these are exactly what would let it escape the target folder.
+_INVALID_CATEGORY_CHARS = set('/\\:*?"<>|')
+
 
 # ── Enums & data classes ──────────────────────────────────────────────────────
 
@@ -61,10 +70,43 @@ class SortResult:
     category_counts: dict[str, int] = field(default_factory=dict)
 
 
+# ── Path safety helpers ───────────────────────────────────────────────────────
+
+def is_within(child: Path, parent: Path) -> bool:
+    """
+    True if *child* resolves to *parent* or somewhere beneath it.
+    Used to keep undo restores and category folders confined to the target, so a
+    crafted undo log or config can't relocate files outside it. ``is_relative_to``
+    only landed in 3.9, so this uses ``relative_to`` for our 3.8 floor.
+    """
+    try:
+        child.resolve().relative_to(parent.resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def sanitize_category(name: str) -> str:
+    """
+    Return *name* unchanged if it is safe to use as a sub-folder name, else raise
+    ``ValueError``. Rejects empty names, ``..`` traversal, and any path separator
+    or drive/reserved character — all of which could push files outside the
+    target folder (e.g. ``"C:/Windows"`` or ``"../../elsewhere"``).
+    """
+    cleaned = name.strip()
+    if not cleaned:
+        raise ValueError("category name may not be empty")
+    if cleaned in {".", ".."} or ".." in cleaned:
+        raise ValueError(f"category name '{name}' may not contain '..'")
+    if any(char in _INVALID_CATEGORY_CHARS for char in cleaned):
+        raise ValueError(f"category name '{name}' contains an invalid path character")
+    return cleaned
+
+
 # ── Config & extension-map helpers ────────────────────────────────────────────
 
 def load_config(config_path: Path) -> dict[str, list[str]]:
-    """Parse a JSON config file and return its category -> extensions mapping."""
+    """Parse a JSON config file and return its validated category -> extensions mapping."""
     try:
         raw = json.loads(config_path.read_text(encoding="utf-8"))
     except FileNotFoundError:
@@ -76,6 +118,22 @@ def load_config(config_path: Path) -> dict[str, list[str]]:
     if not isinstance(raw, dict):
         print("  Error: Config must be a JSON object mapping category names to extension lists.")
         sys.exit(1)
+
+    for category, extensions in raw.items():
+        try:
+            sanitize_category(category)
+        except ValueError as e:
+            print(f"  Error: {e}.")
+            sys.exit(1)
+        # A bare string is iterable, so without this check "py" would silently
+        # become the extensions 'p' and 'y'. Require an explicit list of strings.
+        if not isinstance(extensions, list) or not all(isinstance(e, str) for e in extensions):
+            print(f"  Error: extensions for category '{category}' must be a list of strings.")
+            sys.exit(1)
+        for ext in extensions:
+            if not ext.startswith(".") or len(ext) < 2:
+                print(f"  Error: extension '{ext}' in category '{category}' must start with a dot, e.g. '.py'.")
+                sys.exit(1)
     return raw
 
 
@@ -88,6 +146,7 @@ def build_ext_map(extra: dict[str, list[str]] | None = None) -> dict[str, str]:
     merged: dict[str, list[str]] = {cat: list(exts) for cat, exts in EXTENSION_MAPPING.items()}
     if extra:
         for cat, exts in extra.items():
+            sanitize_category(cat)  # guards callers that bypass load_config (e.g. the GUI)
             normalised = [e.lower() for e in exts]
             if cat in merged:
                 merged[cat] = list(set(merged[cat]) | set(normalised))
@@ -121,13 +180,16 @@ def handle_collision(dest_file_path: Path, occupied: set[Path] | None = None) ->
     """
     if occupied is None:
         occupied = set()
-    if not dest_file_path.exists() and dest_file_path not in occupied:
+    # os.path.lexists (not .exists) so a *broken* symlink sitting at the
+    # destination still counts as occupied — otherwise shutil.move could
+    # silently clobber it on POSIX, breaking the never-overwrite guarantee.
+    if not os.path.lexists(dest_file_path) and dest_file_path not in occupied:
         return dest_file_path
     stem, suffix, directory = dest_file_path.stem, dest_file_path.suffix, dest_file_path.parent
     counter = 1
     while True:
         new_path = directory / f"{stem} ({counter}){suffix}"
-        if not new_path.exists() and new_path not in occupied:
+        if not os.path.lexists(new_path) and new_path not in occupied:
             return new_path
         counter += 1
 
@@ -141,6 +203,9 @@ def read_undo_runs(log_path: Path) -> list[dict]:
     read back as a one-element list so an upgrade never strands an existing undo.
     """
     if not log_path.exists():
+        return []
+    if log_path.stat().st_size > MAX_UNDO_LOG_BYTES:
+        print(f"  Warning: undo log '{log_path}' is unexpectedly large and will be ignored.\n")
         return []
     try:
         data = json.loads(log_path.read_text(encoding="utf-8"))
@@ -216,6 +281,14 @@ def sort_directory(
     undo_log: list[dict[str, str]] = []
 
     for file_path in sorted(target_dir.iterdir()):
+        # Skip symlinks before is_file(), which would follow the link and let a
+        # link to a file elsewhere be categorised (and moved) as if it were local.
+        if file_path.is_symlink():
+            result.system_ignored += 1
+            if verbosity == Verbosity.VERBOSE:
+                print(f"  [Link]     {file_path.name} (symlink skipped)\n")
+            continue
+
         if not file_path.is_file():
             continue
 
@@ -292,9 +365,22 @@ def undo_last_sort(target_dir: Path, verbosity: Verbosity, dry_run: bool = False
         return
 
     run       = runs[-1]
-    moves     = run.get("moves", [])
     timestamp = run.get("timestamp", "unknown")
     remaining = len(runs) - 1
+
+    # Confine every restore to the target folder. The undo log is a plain file in
+    # a folder that fills with untrusted downloads, so a crafted entry could
+    # otherwise move an arbitrary file to an arbitrary location. Entries whose
+    # source or destination escape the target are refused, not executed.
+    moves, blocked = [], 0
+    for entry in run.get("moves", []):
+        src, dst = Path(entry.get("src", "")), Path(entry.get("dst", ""))
+        if not (is_within(src, target_dir) and is_within(dst, target_dir)):
+            blocked += 1
+            if verbosity != Verbosity.QUIET:
+                print(f"  [Blocked]  Refusing to restore outside the target folder: '{dst.name or entry}'\n")
+            continue
+        moves.append(entry)
 
     action = "Would undo" if dry_run else "Undoing"
     print(f"  {action} {len(moves)} move(s) from {timestamp}...\n")
@@ -338,6 +424,8 @@ def undo_last_sort(target_dir: Path, verbosity: Verbosity, dry_run: bool = False
     print(f"\n  {'Would restore' if dry_run else 'Restored'} {undone} file(s).")
     if failed:
         print(f"  Failed   {failed} file(s) (already missing or locked).")
+    if blocked:
+        print(f"  Blocked  {blocked} entr{'y' if blocked == 1 else 'ies'} pointing outside the target folder.")
     if cleaned:
         print(f"  Cleaned  {cleaned} empty category folder(s).")
     if dry_run:
