@@ -17,10 +17,13 @@ dependencies = []
 dev = ["pytest>=7"]
 
 [tool.setuptools]
-py-modules = ["sortinghat"]
+py-modules = ["sortinghat", "sortinghat_gui"]
 
 [project.scripts]
 sortinghat = "sortinghat:main"
+
+[project.gui-scripts]
+sortinghat-gui = "sortinghat_gui:main"
 
 [project.urls]
 Repository = "https://github.com/jeevanb93/SortingHat"

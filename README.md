@@ -6,6 +6,7 @@ Nothing is ever overwritten, every live run can be undone, and every action can 
 
 ## Features
 
+- **Desktop GUI**: An optional Tkinter interface (`sortinghat --gui`) with a folder picker, a live preview table, and Sort / Undo buttons — still with zero third-party dependencies.
 - **Interactive Menu**: Launched with no arguments (or by double-clicking the `.exe`), SortingHat asks what you want to do instead of sorting straight away — preview, sort, undo, or change folder, each behind a number key, highlighted in green.
 - **Automated Categorization**: Sorts files into logical folders like `Documents`, `Pictures`, `Videos`, `Music`, `Compressed`, `Installers`, `Torrents`, and `Misc`.
 - **Smart Collision Handling**: If a file with the same name already exists in the destination folder, SortingHat safely renames the new file (e.g., `file (1).txt`) to ensure nothing is ever overwritten or lost.
@@ -15,7 +16,7 @@ Nothing is ever overwritten, every live run can be undone, and every action can 
 - **Exclude Patterns**: Skip specific files using glob patterns (e.g., `--exclude '*.tmp'`).
 - **Adjustable Verbosity**: Run silently with `--quiet` or get detailed logs with `--verbose`.
 - **System File Filtering**: Automatically ignores dotfiles and OS artefacts like `desktop.ini` and `Thumbs.db`.
-- **No External Dependencies**: Uses only standard Python libraries (`argparse`, `fnmatch`, `shutil`, `pathlib`).
+- **No External Dependencies**: Uses only the standard library — `argparse`, `fnmatch`, `shutil`, `pathlib` for the core, and `tkinter`, `threading`, `queue` for the GUI.
 
 ## Requirements
 
@@ -93,6 +94,22 @@ Type the number and press Enter. Notes:
 A typical safe session is `[1]` to preview, `[2]` to commit, and `[4]` if you change your mind.
 
 **Forcing the mode:** use `--menu` to open the menu from a normal terminal, or `--no-menu` to sort immediately even with no arguments.
+
+### The Desktop GUI
+
+For a point-and-click experience, launch the graphical interface:
+
+```bash
+python sortinghat.py --gui
+sortinghat --gui          # if installed
+sortinghat-gui            # dedicated GUI launcher
+```
+
+The window gives you a folder picker, a **live preview table** (file → category) populated by a dry run, and **Preview / Sort / Undo** buttons, with a scrolling log and progress bar underneath. The `Undo` state is shown so you always know what an undo would restore.
+
+It is built on Python's bundled Tkinter, so it needs **no extra packages**. Long operations run on a background thread, so the window never freezes on a large folder. If Tkinter isn't available in your Python build (some minimal Linux installs omit it), the terminal interface remains fully functional.
+
+> **Architecture note:** the GUI does not reimplement any sorting logic. The engine emits typed events to a *reporter*; the CLI supplies a `ConsoleReporter` and the GUI a queue-backed `GuiReporter`, so both front-ends drive the exact same, fully-tested engine. See [`sortinghat_gui.py`](sortinghat_gui.py) for the layering.
 
 ### The Command Line
 
@@ -226,6 +243,7 @@ The config is validated when loaded. Category names must be plain folder names �
 | `--config FILE` | JSON file that adds or extends extension-to-category mappings. |
 | `--menu` | Force the interactive menu. |
 | `--no-menu` | Sort immediately even with no arguments. |
+| `--gui` | Launch the desktop (Tkinter) interface. |
 | `--quiet` | Summary only. Mutually exclusive with `--verbose`. |
 | `--verbose` | Extra detail: system files, exclusions, undo-log activity. |
 | `-h`, `--help` | Show the built-in help. |
@@ -266,11 +284,11 @@ SortingHat only ever operates inside the folder you point it at:
 
 ---
 
-## Building a Standalone Executable
+## Building Standalone Executables
 
-To run SortingHat on a machine without Python, build a single-file Windows executable with PyInstaller.
+To run SortingHat on a machine without Python, build single-file Windows executables with PyInstaller.
 
-**The easy way** — run the included script from the project root, which installs PyInstaller if needed and builds with the right options:
+**The easy way** — run the included script from the project root. It installs PyInstaller if needed, generates the app icon, and builds **both** the console and GUI executables:
 
 ```bash
 build_exe.bat
@@ -280,19 +298,35 @@ build_exe.bat
 
 ```bash
 pip install pyinstaller
-pyinstaller --onefile --name "SortingHat" sortinghat.py
+python tools\make_icon.py                                   # generates assets\sortinghat.ico
+
+REM console / menu build
+pyinstaller --onefile --name "SortingHat" --icon "assets\sortinghat.ico" sortinghat.py
+
+REM desktop GUI build (windowed, no console)
+pyinstaller --onefile --windowed --name "SortingHat-GUI" ^
+  --icon "assets\sortinghat.ico" --add-data "assets\sortinghat.ico;assets" sortinghat_gui.py
 ```
 
-Either way the result is **`dist\SortingHat.exe`** — a self-contained file you can copy anywhere. A `SortingHat.spec` file is generated on first build and can be reused directly:
+You get two self-contained files you can copy anywhere:
 
-```bash
-pyinstaller SortingHat.spec
-```
+| File | What it is |
+| :--- | :--- |
+| `dist\SortingHat.exe` | Terminal app — the interactive menu and full CLI. Built without Tkinter to stay lean (~8.6 MB), so `--gui` here points you to the GUI executable. |
+| `dist\SortingHat-GUI.exe` | Desktop app — double-click straight to the graphical interface, no console window. |
+
+(Running `--gui` from source still opens the window directly, since a normal Python install includes Tkinter.)
+
+### The application icon
+
+Both executables use `assets\sortinghat.ico` for their taskbar and window icon. A placeholder wizard-hat icon is generated by `tools\make_icon.py` (pure standard library — no Pillow needed). To use your own, replace `assets\sortinghat.ico` with any multi-resolution `.ico` (16/32/48/256 px) and rebuild.
+
+> The GUI also sets a Windows *AppUserModelID*, so the taskbar shows this icon rather than folding the window under the generic Python launcher.
 
 ### Using the .exe
 
-- **Double-click it** and you get the interactive menu; the window stays open until you choose `[0] Exit`.
-- **Call it with arguments** from a terminal and it runs that command directly, then prompts you to press Enter before closing so you can read the output:
+- **`SortingHat-GUI.exe`** — double-click for the desktop window.
+- **`SortingHat.exe`** — double-click for the interactive menu (stays open until you choose `[0] Exit`), or call it with arguments from a terminal:
   ```
   SortingHat.exe "C:\Path\To\Your\Messy\Folder" --dry-run
   ```
@@ -312,17 +346,21 @@ pip install -e ".[dev]"
 python -m pytest
 ```
 
-The suite covers categorization, collision handling, config parsing, exclusions, the undo log format and stacking, empty-folder cleanup, colour fallback, and the interactive menu.
+The suite covers categorization, collision handling, config parsing and validation, path-confinement safety, exclusions, the undo log format and stacking, empty-folder cleanup, colour fallback, the interactive menu, and the GUI's reporter/controller logic (headless).
 
 ### Project Layout
 
 | Path | Purpose |
 | :--- | :--- |
-| `sortinghat.py` | The entire tool — a single, dependency-free module. |
-| `tests/test_sortinghat.py` | Pytest suite. |
-| `pyproject.toml` | Packaging metadata and the `sortinghat` console-script entry point. |
+| `sortinghat.py` | The engine + CLI — a single, dependency-free module. |
+| `sortinghat_gui.py` | The optional Tkinter GUI (App / Controller / GuiReporter). |
+| `tests/test_sortinghat.py` | Pytest suite for the engine and CLI. |
+| `tests/test_gui.py` | Headless tests for the GUI's reporter/controller logic. |
+| `pyproject.toml` | Packaging metadata and the `sortinghat` / `sortinghat-gui` entry points. |
 | `example_config.json` | Sample custom category configuration. |
-| `build_exe.bat` | One-step PyInstaller build script. |
+| `assets/sortinghat.ico` | Application icon for the executables (placeholder; replaceable). |
+| `tools/make_icon.py` | Regenerates the placeholder icon using only the standard library. |
+| `build_exe.bat` | One-step PyInstaller build script (console + GUI). |
 | `SortingHat.spec`, `build/`, `dist/` | Generated on first build. Not tracked in git, and safe to delete. |
 
 ## License

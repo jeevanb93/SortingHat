@@ -70,6 +70,20 @@ class SortResult:
     category_counts: dict[str, int] = field(default_factory=dict)
 
 
+@dataclass
+class UndoResult:
+    """Outcome of an undo run, so presentation can render the summary from data."""
+    found:     bool = True   # False when there was no undo log to act on
+    restored:  int = 0
+    failed:    int = 0
+    blocked:   int = 0
+    cleaned:   int = 0
+    remaining: int = 0       # earlier runs still on the stack
+    count:     int = 0       # entries in the run being undone
+    timestamp: str = "unknown"
+    dry_run:   bool = False
+
+
 # ── Path safety helpers ───────────────────────────────────────────────────────
 
 def is_within(child: Path, parent: Path) -> bool:
@@ -264,29 +278,38 @@ def sort_directory(
     exclude_patterns: list[str] | None = None,
     verbosity: Verbosity = Verbosity.NORMAL,
     ext_map: dict[str, str] | None = None,
+    reporter: Reporter | None = None,
 ) -> SortResult:
     """
     Scan *target_dir* and sort every file into category sub-folders.
     Returns a :class:`SortResult` with counts and a per-category breakdown.
     On a live run, writes an undo log to *target_dir* so the sort can be reversed.
+
+    Progress and per-file activity are emitted to *reporter*; when none is given a
+    :class:`ConsoleReporter` at *verbosity* is used, preserving the terminal output.
     """
     if exclude_patterns is None:
         exclude_patterns = []
     if ext_map is None:
         ext_map = build_ext_map()
+    if reporter is None:
+        reporter = ConsoleReporter(verbosity)
 
     result: SortResult = SortResult()
     category_counts: dict[str, int] = defaultdict(int)
     occupied: set[Path] = set()
     undo_log: list[dict[str, str]] = []
 
-    for file_path in sorted(target_dir.iterdir()):
+    entries = sorted(target_dir.iterdir())
+    total = len(entries)
+    for index, file_path in enumerate(entries, start=1):
+        reporter.progress(index, total)
+
         # Skip symlinks before is_file(), which would follow the link and let a
         # link to a file elsewhere be categorised (and moved) as if it were local.
         if file_path.is_symlink():
             result.system_ignored += 1
-            if verbosity == Verbosity.VERBOSE:
-                print(f"  [Link]     {file_path.name} (symlink skipped)\n")
+            reporter.ignored(file_path.name, "symlink")
             continue
 
         if not file_path.is_file():
@@ -294,44 +317,37 @@ def sort_directory(
 
         if is_system_file(file_path):
             result.system_ignored += 1
-            if verbosity == Verbosity.VERBOSE:
-                print(f"  [System]   {file_path.name}\n")
+            reporter.ignored(file_path.name, "system")
             continue
 
         if exclude_patterns and is_excluded(file_path, exclude_patterns):
             result.excluded += 1
-            if verbosity != Verbosity.QUIET:
-                print(f"  {colourise('[Excluded]', YELLOW)} {file_path.name}\n")
+            reporter.excluded(file_path.name)
             continue
 
-        category    = get_category(file_path.suffix, ext_map)
+        category   = get_category(file_path.suffix, ext_map)
         dest_folder = target_dir / category
-        final_dest  = handle_collision(dest_folder / file_path.name, occupied)
-        renamed     = final_dest.name != file_path.name
-        rename_note = " (renamed to avoid collision)" if renamed else ""
+        final_dest = handle_collision(dest_folder / file_path.name, occupied)
+        renamed    = final_dest.name != file_path.name
 
         if dry_run:
-            if verbosity != Verbosity.QUIET:
-                print(f"  {colourise('[Preview]', CYAN)}  {file_path.name}")
-                print(f"             -> {category}/{final_dest.name}{rename_note}\n")
+            reporter.previewed(file_path.name, category, final_dest.name, renamed)
             occupied.add(final_dest)
             result.moved += 1
             category_counts[category] += 1
         else:
             dest_folder.mkdir(parents=True, exist_ok=True)
-            if verbosity != Verbosity.QUIET:
-                print(f"  Moving  {file_path.name}")
-                print(f"       -> {category}/{final_dest.name}{rename_note}\n")
+            reporter.moved(file_path.name, category, final_dest.name, renamed)
             try:
                 shutil.move(str(file_path), str(final_dest))
                 undo_log.append({"src": str(file_path), "dst": str(final_dest)})
                 result.moved += 1
                 category_counts[category] += 1
             except PermissionError:
-                print(f"  {colourise('[SKIPPED]', RED)} Permission denied - file may be in use.\n")
+                reporter.skipped(file_path.name, "Permission denied - file may be in use.")
                 result.skipped += 1
             except OSError as e:
-                print(f"  {colourise('[SKIPPED]', RED)} OS error: {e}\n")
+                reporter.skipped(file_path.name, f"OS error: {e}")
                 result.skipped += 1
 
     result.category_counts = dict(category_counts)
@@ -343,26 +359,35 @@ def sort_directory(
         runs.append({"timestamp": datetime.now(timezone.utc).isoformat(),
                      "target": str(target_dir), "moves": undo_log})
         write_undo_runs(log_path, runs)
-        if verbosity == Verbosity.VERBOSE:
-            print(f"  Undo log written to: {log_path} ({len(runs)} run(s) recorded)\n")
+        reporter.note(f"Undo log written to: {log_path} ({len(runs)} run(s) recorded)")
 
     return result
 
 
 # ── Undo logic ────────────────────────────────────────────────────────────────
 
-def undo_last_sort(target_dir: Path, verbosity: Verbosity, dry_run: bool = False) -> None:
+def undo_last_sort(
+    target_dir: Path,
+    verbosity: Verbosity = Verbosity.NORMAL,
+    dry_run: bool = False,
+    reporter: Reporter | None = None,
+) -> UndoResult:
     """
     Reverse the most recent sort run recorded in *target_dir*.
     Runs are stacked, so repeated calls walk back through the history one sort at
     a time. With *dry_run* the log is left untouched and nothing is moved.
+
+    Returns an :class:`UndoResult`; activity is emitted to *reporter* (a
+    :class:`ConsoleReporter` at *verbosity* by default).
     """
+    if reporter is None:
+        reporter = ConsoleReporter(verbosity)
+
     log_path = target_dir / UNDO_LOG_FILENAME
     runs = read_undo_runs(log_path)
     if not runs:
-        print(f"  No undo log found in '{target_dir}'.")
-        print("  Run SortingHat on the folder first before attempting an undo.")
-        return
+        reporter.no_undo_log(target_dir)
+        return UndoResult(found=False, dry_run=dry_run)
 
     run       = runs[-1]
     timestamp = run.get("timestamp", "unknown")
@@ -377,15 +402,11 @@ def undo_last_sort(target_dir: Path, verbosity: Verbosity, dry_run: bool = False
         src, dst = Path(entry.get("src", "")), Path(entry.get("dst", ""))
         if not (is_within(src, target_dir) and is_within(dst, target_dir)):
             blocked += 1
-            if verbosity != Verbosity.QUIET:
-                print(f"  {colourise('[Blocked]', RED)}  Refusing to restore outside the target folder: '{dst.name or entry}'\n")
+            reporter.blocked(dst.name or str(entry))
             continue
         moves.append(entry)
 
-    action = "Would undo" if dry_run else "Undoing"
-    print(f"  {action} {len(moves)} move(s) from {timestamp}...\n")
-    print("-" * 60)
-    print()
+    reporter.undo_started(len(moves), timestamp, dry_run)
 
     undone, failed = 0, 0
     occupied: set[Path] = set()
@@ -394,15 +415,11 @@ def undo_last_sort(target_dir: Path, verbosity: Verbosity, dry_run: bool = False
     for entry in reversed(moves):
         src, dst = Path(entry["src"]), Path(entry["dst"])
         if not dst.exists():
-            if verbosity != Verbosity.QUIET:
-                print(f"  {colourise('[Missing]', YELLOW)}  '{dst.name}' no longer exists - skipping.\n")
+            reporter.missing(dst.name)
             failed += 1
             continue
         final_src = handle_collision(src, occupied)
-        if verbosity != Verbosity.QUIET:
-            label = colourise("[Preview]  Would restore", CYAN) if dry_run else "Restoring "
-            print(f"  {label} {dst.name}")
-            print(f"         ->  {final_src}\n")
+        reporter.restored(dst.name, final_src, dry_run)
         if dry_run:
             occupied.add(final_src)
             undone += 1
@@ -412,7 +429,7 @@ def undo_last_sort(target_dir: Path, verbosity: Verbosity, dry_run: bool = False
             touched_dirs.add(dst.parent)
             undone += 1
         except (PermissionError, OSError) as e:
-            print(f"  {colourise('[FAILED]', RED)}   Could not restore '{dst.name}': {e}\n")
+            reporter.failed(dst.name, str(e))
             failed += 1
 
     cleaned = 0
@@ -421,19 +438,11 @@ def undo_last_sort(target_dir: Path, verbosity: Verbosity, dry_run: bool = False
         runs.pop()  # prevent double-undo of the same run
         write_undo_runs(log_path, runs)
 
-    print("-" * 60)
-    print(f"\n  {'Would restore' if dry_run else 'Restored'} {undone} file(s).")
-    if failed:
-        print(f"  Failed   {failed} file(s) (already missing or locked).")
-    if blocked:
-        print(f"  Blocked  {blocked} entr{'y' if blocked == 1 else 'ies'} pointing outside the target folder.")
-    if cleaned:
-        print(f"  Cleaned  {cleaned} empty category folder(s).")
-    if dry_run:
-        print("  Dry run  - nothing was moved and the undo log is unchanged.")
-    elif remaining:
-        print(f"  History  {remaining} earlier run(s) still available to undo.")
-    print()
+    result = UndoResult(found=True, restored=undone, failed=failed, blocked=blocked,
+                        cleaned=cleaned, remaining=remaining, count=len(moves),
+                        timestamp=timestamp, dry_run=dry_run)
+    reporter.undo_summary(result)
+    return result
 
 
 # ── Output helpers ────────────────────────────────────────────────────────────
@@ -525,6 +534,120 @@ def supports_colour() -> bool:
 def colourise(text: str, colour: str = GREEN) -> str:
     """Wrap *text* in an ANSI colour, or return it untouched when colour is unavailable."""
     return f"{colour}{text}{RESET}" if supports_colour() else text
+
+
+# ── Reporting seam ────────────────────────────────────────────────────────────
+#
+# The engine (sort_directory / undo_last_sort) never prints directly. It emits
+# events to a Reporter, and each presentation layer supplies its own: the CLI a
+# ConsoleReporter that writes coloured text to stdout, the GUI a reporter that
+# marshals the same events onto its widgets. Every method defaults to a no-op so
+# a reporter only overrides what it cares about (the console ignores `progress`;
+# the GUI uses it for a progress bar). This one seam is what lets both front-ends
+# reuse the real engine instead of duplicating it or scraping stdout.
+
+class Reporter:
+    """Sink for engine events. Presentation layers subclass and override selectively."""
+
+    # ── sort events ──
+    def moved(self, name: str, category: str, dest_name: str, renamed: bool) -> None: ...
+    def previewed(self, name: str, category: str, dest_name: str, renamed: bool) -> None: ...
+    def skipped(self, name: str, reason: str) -> None: ...
+    def excluded(self, name: str) -> None: ...
+    def ignored(self, name: str, kind: str) -> None: ...          # kind: "system" | "symlink"
+
+    # ── undo events ──
+    def undo_started(self, count: int, timestamp: str, dry_run: bool) -> None: ...
+    def restored(self, name: str, dest: Path, dry_run: bool) -> None: ...
+    def missing(self, name: str) -> None: ...
+    def blocked(self, name: str) -> None: ...
+    def failed(self, name: str, error: str) -> None: ...
+    def no_undo_log(self, target_dir: Path) -> None: ...
+    def undo_summary(self, result: UndoResult) -> None: ...
+
+    # ── shared ──
+    def progress(self, done: int, total: int) -> None: ...
+    def note(self, message: str) -> None: ...                     # verbose-only asides
+
+
+class ConsoleReporter(Reporter):
+    """Reporter that reproduces SortingHat's coloured terminal output, gated by verbosity."""
+
+    def __init__(self, verbosity: Verbosity = Verbosity.NORMAL) -> None:
+        self.verbosity = verbosity
+
+    @staticmethod
+    def _rename_note(renamed: bool) -> str:
+        return " (renamed to avoid collision)" if renamed else ""
+
+    def moved(self, name, category, dest_name, renamed):
+        if self.verbosity != Verbosity.QUIET:
+            print(f"  Moving  {name}")
+            print(f"       -> {category}/{dest_name}{self._rename_note(renamed)}\n")
+
+    def previewed(self, name, category, dest_name, renamed):
+        if self.verbosity != Verbosity.QUIET:
+            print(f"  {colourise('[Preview]', CYAN)}  {name}")
+            print(f"             -> {category}/{dest_name}{self._rename_note(renamed)}\n")
+
+    def skipped(self, name, reason):
+        print(f"  {colourise('[SKIPPED]', RED)} {reason}\n")
+
+    def excluded(self, name):
+        if self.verbosity != Verbosity.QUIET:
+            print(f"  {colourise('[Excluded]', YELLOW)} {name}\n")
+
+    def ignored(self, name, kind):
+        if self.verbosity == Verbosity.VERBOSE:
+            if kind == "symlink":
+                print(f"  [Link]     {name} (symlink skipped)\n")
+            else:
+                print(f"  [System]   {name}\n")
+
+    def undo_started(self, count, timestamp, dry_run):
+        print(f"  {'Would undo' if dry_run else 'Undoing'} {count} move(s) from {timestamp}...\n")
+        print("-" * 60)
+        print()
+
+    def restored(self, name, dest, dry_run):
+        if self.verbosity != Verbosity.QUIET:
+            label = colourise("[Preview]  Would restore", CYAN) if dry_run else "Restoring "
+            print(f"  {label} {name}")
+            print(f"         ->  {dest}\n")
+
+    def missing(self, name):
+        if self.verbosity != Verbosity.QUIET:
+            print(f"  {colourise('[Missing]', YELLOW)}  '{name}' no longer exists - skipping.\n")
+
+    def blocked(self, name):
+        if self.verbosity != Verbosity.QUIET:
+            print(f"  {colourise('[Blocked]', RED)}  Refusing to restore outside the target folder: '{name}'\n")
+
+    def failed(self, name, error):
+        print(f"  {colourise('[FAILED]', RED)}   Could not restore '{name}': {error}\n")
+
+    def no_undo_log(self, target_dir):
+        print(f"  No undo log found in '{target_dir}'.")
+        print("  Run SortingHat on the folder first before attempting an undo.")
+
+    def undo_summary(self, r):
+        print("-" * 60)
+        print(f"\n  {'Would restore' if r.dry_run else 'Restored'} {r.restored} file(s).")
+        if r.failed:
+            print(f"  Failed   {r.failed} file(s) (already missing or locked).")
+        if r.blocked:
+            print(f"  Blocked  {r.blocked} entr{'y' if r.blocked == 1 else 'ies'} pointing outside the target folder.")
+        if r.cleaned:
+            print(f"  Cleaned  {r.cleaned} empty category folder(s).")
+        if r.dry_run:
+            print("  Dry run  - nothing was moved and the undo log is unchanged.")
+        elif r.remaining:
+            print(f"  History  {r.remaining} earlier run(s) still available to undo.")
+        print()
+
+    def note(self, message):
+        if self.verbosity == Verbosity.VERBOSE:
+            print(f"  {message}\n")
 
 
 # ── Interactive menu ──────────────────────────────────────────────────────────
@@ -650,6 +773,10 @@ def main() -> None:
         "--no-menu", action="store_true",
         help="Sort immediately even when no arguments are given (the pre-menu behaviour).",
     )
+    parser.add_argument(
+        "--gui", action="store_true",
+        help="Launch the graphical interface instead of the terminal.",
+    )
     verbosity_group = parser.add_mutually_exclusive_group()
     verbosity_group.add_argument(
         "--quiet", action="store_true",
@@ -670,6 +797,21 @@ def main() -> None:
         print(f"  Error: '{target_dir}' does not exist or is not a directory.")
         _wait_for_exit()
         sys.exit(1)
+
+    # ── GUI mode ──────────────────────────────────────────────────────────────
+    # Imported lazily so the terminal path never pays the Tkinter import cost.
+    # The console .exe is built without Tkinter to stay lean, so the import can
+    # legitimately fail there — fall back to a pointer rather than a traceback.
+    if args.gui:
+        try:
+            import sortinghat_gui
+        except ImportError:
+            print("  The graphical interface isn't available in this build.")
+            print("  Use SortingHat-GUI.exe, or run from source with Python (Tkinter included).")
+            _wait_for_exit()
+            sys.exit(1)
+        sortinghat_gui.main(target_dir)
+        return
 
     # ── Interactive mode ──────────────────────────────────────────────────────
     # A double-clicked .exe gets the menu; an explicit request gets it anywhere.
