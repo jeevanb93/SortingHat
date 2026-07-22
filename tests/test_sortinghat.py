@@ -7,6 +7,9 @@ import pytest
 
 from sortinghat import (
     GREEN,
+    RED,
+    YELLOW,
+    CYAN,
     RESET,
     Verbosity,
     SortResult,
@@ -14,6 +17,7 @@ from sortinghat import (
     colourise,
     describe_undo_state,
     is_within,
+    print_summary,
     sanitize_category,
     get_category,
     handle_collision,
@@ -536,6 +540,40 @@ class TestColourOutput:
         supports_colour.cache_clear()
         assert supports_colour() is False
         supports_colour.cache_clear()
+
+
+# ── Status colours in run / summary output ────────────────────────────────────
+
+class TestStatusColours:
+    def _result(self, **kw):
+        base = dict(moved=3, category_counts={"Documents": 2, "Pictures": 1})
+        base.update(kw)
+        return SortResult(**base)
+
+    def test_totals_are_green_when_supported(self, monkeypatch, capsys):
+        monkeypatch.setattr("sortinghat.supports_colour", lambda: True)
+        print_summary(self._result(), dry_run=False, verbosity=Verbosity.NORMAL)
+        out = capsys.readouterr().out
+        assert f"{GREEN}Moved 3 file(s).{RESET}" in out
+
+    def test_skipped_is_red_and_excluded_is_yellow(self, monkeypatch, capsys):
+        monkeypatch.setattr("sortinghat.supports_colour", lambda: True)
+        print_summary(self._result(skipped=2, excluded=1), dry_run=False, verbosity=Verbosity.NORMAL)
+        out = capsys.readouterr().out
+        assert RED in out and YELLOW in out
+
+    def test_preview_tag_is_cyan(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.setattr("sortinghat.supports_colour", lambda: True)
+        (tmp_path / "doc.pdf").write_text("x")
+        sort_directory(tmp_path, dry_run=True, verbosity=Verbosity.NORMAL)
+        assert f"{CYAN}[Preview]{RESET}" in capsys.readouterr().out
+
+    def test_no_escape_codes_when_colour_unsupported(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.setattr("sortinghat.supports_colour", lambda: False)
+        (tmp_path / "doc.pdf").write_text("x")
+        sort_directory(tmp_path, dry_run=True, verbosity=Verbosity.NORMAL)
+        print_summary(self._result(skipped=1, excluded=1), dry_run=True, verbosity=Verbosity.NORMAL)
+        assert "\033[" not in capsys.readouterr().out
 
 
 # ── run_interactive_menu ──────────────────────────────────────────────────────

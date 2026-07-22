@@ -301,7 +301,7 @@ def sort_directory(
         if exclude_patterns and is_excluded(file_path, exclude_patterns):
             result.excluded += 1
             if verbosity != Verbosity.QUIET:
-                print(f"  [Excluded] {file_path.name}\n")
+                print(f"  {colourise('[Excluded]', YELLOW)} {file_path.name}\n")
             continue
 
         category    = get_category(file_path.suffix, ext_map)
@@ -312,7 +312,7 @@ def sort_directory(
 
         if dry_run:
             if verbosity != Verbosity.QUIET:
-                print(f"  [Preview]  {file_path.name}")
+                print(f"  {colourise('[Preview]', CYAN)}  {file_path.name}")
                 print(f"             -> {category}/{final_dest.name}{rename_note}\n")
             occupied.add(final_dest)
             result.moved += 1
@@ -328,10 +328,10 @@ def sort_directory(
                 result.moved += 1
                 category_counts[category] += 1
             except PermissionError:
-                print("  [SKIPPED] Permission denied - file may be in use.\n")
+                print(f"  {colourise('[SKIPPED]', RED)} Permission denied - file may be in use.\n")
                 result.skipped += 1
             except OSError as e:
-                print(f"  [SKIPPED] OS error: {e}\n")
+                print(f"  {colourise('[SKIPPED]', RED)} OS error: {e}\n")
                 result.skipped += 1
 
     result.category_counts = dict(category_counts)
@@ -378,7 +378,7 @@ def undo_last_sort(target_dir: Path, verbosity: Verbosity, dry_run: bool = False
         if not (is_within(src, target_dir) and is_within(dst, target_dir)):
             blocked += 1
             if verbosity != Verbosity.QUIET:
-                print(f"  [Blocked]  Refusing to restore outside the target folder: '{dst.name or entry}'\n")
+                print(f"  {colourise('[Blocked]', RED)}  Refusing to restore outside the target folder: '{dst.name or entry}'\n")
             continue
         moves.append(entry)
 
@@ -395,12 +395,13 @@ def undo_last_sort(target_dir: Path, verbosity: Verbosity, dry_run: bool = False
         src, dst = Path(entry["src"]), Path(entry["dst"])
         if not dst.exists():
             if verbosity != Verbosity.QUIET:
-                print(f"  [Missing]  '{dst.name}' no longer exists - skipping.\n")
+                print(f"  {colourise('[Missing]', YELLOW)}  '{dst.name}' no longer exists - skipping.\n")
             failed += 1
             continue
         final_src = handle_collision(src, occupied)
         if verbosity != Verbosity.QUIET:
-            print(f"  {'[Preview]  Would restore' if dry_run else 'Restoring '} {dst.name}")
+            label = colourise("[Preview]  Would restore", CYAN) if dry_run else "Restoring "
+            print(f"  {label} {dst.name}")
             print(f"         ->  {final_src}\n")
         if dry_run:
             occupied.add(final_src)
@@ -411,7 +412,7 @@ def undo_last_sort(target_dir: Path, verbosity: Verbosity, dry_run: bool = False
             touched_dirs.add(dst.parent)
             undone += 1
         except (PermissionError, OSError) as e:
-            print(f"  [FAILED]   Could not restore '{dst.name}': {e}\n")
+            print(f"  {colourise('[FAILED]', RED)}   Could not restore '{dst.name}': {e}\n")
             failed += 1
 
     cleaned = 0
@@ -447,7 +448,7 @@ def print_summary(result: SortResult, dry_run: bool, verbosity: Verbosity) -> No
         max_count = max(result.category_counts.values())
         total     = sum(result.category_counts.values())
 
-        print(f"\n  {action} {total} file(s).\n")
+        print(f"\n  {colourise(f'{action} {total} file(s).', GREEN)}\n")
         print(f"  {'Category':<14}  {'':20}  Count")
         print(f"  {'-'*14}  {'-'*20}  -----")
         for cat, count in sorted(result.category_counts.items()):
@@ -457,12 +458,12 @@ def print_summary(result: SortResult, dry_run: bool, verbosity: Verbosity) -> No
         print(f"  {'-'*14}  {' '*20}  -----")
         print(f"  {'Total':<14}  {' '*20}  {total}")
     else:
-        print(f"\n  {action} 0 file(s).")
+        print(f"\n  {colourise(f'{action} 0 file(s).', GREEN)}")
 
     if result.skipped:
-        print(f"\n  Skipped  : {result.skipped} file(s) due to errors.")
+        print(f"\n  {colourise(f'Skipped  : {result.skipped} file(s) due to errors.', RED)}")
     if result.excluded:
-        print(f"  Excluded : {result.excluded} file(s) matched --exclude pattern(s).")
+        print(f"  {colourise(f'Excluded : {result.excluded} file(s) matched --exclude pattern(s).', YELLOW)}")
     if result.system_ignored and verbosity != Verbosity.QUIET:
         print(f"  Ignored  : {result.system_ignored} system/hidden file(s).")
     print()
@@ -479,8 +480,11 @@ def _wait_for_exit() -> None:
 
 # ── Colour output ─────────────────────────────────────────────────────────────
 
-GREEN = "\033[92m"
-RESET = "\033[0m"
+GREEN  = "\033[92m"
+RED    = "\033[91m"
+YELLOW = "\033[93m"
+CYAN   = "\033[96m"
+RESET  = "\033[0m"
 
 
 def _enable_windows_ansi() -> bool:

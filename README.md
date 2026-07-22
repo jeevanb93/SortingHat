@@ -211,6 +211,8 @@ python sortinghat.py --config example_config.json
 
 Merge rules: a **new** category name creates a new folder; an **existing** category name has your extensions added to the built-in list rather than replacing it. Extensions are matched case-insensitively and should include the leading dot.
 
+The config is validated when loaded. Category names must be plain folder names — no path separators, `..`, or drive letters — and each value must be a list of extension strings that each begin with a dot. A malformed config (for example `{"Code": "py"}` or `{"C:/Windows": [".pdf"]}`) is rejected with an explanatory error rather than silently doing the wrong thing.
+
 ---
 
 ## Command Reference
@@ -249,7 +251,18 @@ SortingHat maps extensions to the following categories:
 | **Torrents** | `.torrent` |
 | **Misc** | Any extension not listed above. |
 
-Only files in the **top level** of the target folder are considered. Existing subdirectories, dotfiles, and OS system files (`desktop.ini`, `Thumbs.db`) are left untouched.
+Only files in the **top level** of the target folder are considered. Existing subdirectories, dotfiles, and OS system files (`desktop.ini`, `Thumbs.db`) are left untouched. **Symlinks are skipped**, so a shortcut is never followed and moved as if it were a real local file.
+
+---
+
+## Safety
+
+SortingHat only ever operates inside the folder you point it at:
+
+- **Nothing is overwritten.** Name clashes are renamed (`file (1).txt`); this holds even against a broken symlink already sitting at the destination.
+- **Undo is confined to the target folder.** The undo log is a plain file in a directory that fills with untrusted downloads, so restores are validated: any entry whose source or destination falls outside the target is refused rather than executed.
+- **Configuration is validated.** Category names that contain path separators, `..`, or drive letters are rejected, so a shared config can't redirect your files somewhere unexpected.
+- **Symlinks are skipped** during sorting rather than followed.
 
 ---
 
