@@ -1,5 +1,10 @@
 # SortingHat 🧙‍♂️
 
+[![Latest release](https://img.shields.io/github/v/release/jeevanb93/SortingHat)](https://github.com/jeevanb93/SortingHat/releases/latest)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/jeevanb93/SortingHat/blob/main/LICENSE)
+![Python](https://img.shields.io/badge/python-3.8%2B-blue)
+![Dependencies](https://img.shields.io/badge/dependencies-none-brightgreen)
+
 SortingHat is a simple, lightweight Python CLI tool designed to bring order to the chaos of your messy folders (especially your `Downloads` directory). It automatically categorizes and moves files into organized subdirectories based on their file extensions.
 
 Nothing is ever overwritten, every live run can be undone, and every action can be previewed first.
@@ -23,6 +28,19 @@ Nothing is ever overwritten, every live run can be undone, and every action can 
 | Interactive terminal menu | Desktop GUI |
 | :---: | :---: |
 | ![SortingHat terminal menu](docs/screenshots/SortingHat-CLI.png) | ![SortingHat desktop GUI](docs/screenshots/SortingHat-GUI.png) |
+
+## Download
+
+Prebuilt Windows executables are available on the [**Releases page**](https://github.com/jeevanb93/SortingHat/releases) — **no Python required**. Grab the latest release and download the one you want:
+
+| Download | What it is |
+| :--- | :--- |
+| **`SortingHat-GUI.exe`** | Desktop app — double-click for the graphical interface. |
+| **`SortingHat.exe`** | Terminal app — the interactive menu and full command line. |
+
+On first launch, Windows SmartScreen may warn about an unsigned app — choose **More info → Run anyway**, or, if you'd rather not trust a binary, [run from source](#running-it) or [build it yourself](#building-standalone-executables) (the whole tool is a single readable file).
+
+> Prefer Python? Skip the download entirely and [run from source](#running-it) on any OS.
 
 ## Requirements
 
@@ -64,7 +82,7 @@ To remove it later: `pip uninstall sortinghat`.
 
 ### 3. As a standalone `.exe` (Windows, no Python required)
 
-See [Building a Standalone Executable](#building-a-standalone-executable) below. Once built, double-click `dist\SortingHat.exe` or call it from a terminal like any other command.
+**Download** a prebuilt `SortingHat.exe` (terminal) or `SortingHat-GUI.exe` (desktop) from the [Releases page](https://github.com/jeevanb93/SortingHat/releases), or [build them yourself](#building-standalone-executables). Once you have one, double-click it or call it from a terminal like any other command.
 
 > Throughout this README, examples are written as `python sortinghat.py ...`. Substitute `sortinghat ...` or `SortingHat.exe ...` if you installed or built it — the options are identical.
 
@@ -114,6 +132,8 @@ sortinghat-gui            # dedicated GUI launcher
 The window gives you a folder picker, a **live preview table** (file → category) populated by a dry run, and **Preview / Sort / Undo** buttons, with a scrolling log and progress bar underneath. The `Undo` state is shown so you always know what an undo would restore.
 
 It is built on Python's bundled Tkinter, so it needs **no extra packages**. Long operations run on a background thread, so the window never freezes on a large folder. If Tkinter isn't available in your Python build (some minimal Linux installs omit it), the terminal interface remains fully functional.
+
+> On Windows, you can skip Python altogether and download **`SortingHat-GUI.exe`** from the [Releases page](https://github.com/jeevanb93/SortingHat/releases).
 
 > **Architecture note:** the GUI does not reimplement any sorting logic. The engine emits typed events to a *reporter*; the CLI supplies a `ConsoleReporter` and the GUI a queue-backed `GuiReporter`, so both front-ends drive the exact same, fully-tested engine. See [`sortinghat_gui.py`](sortinghat_gui.py) for the layering.
 
@@ -367,8 +387,10 @@ The suite covers categorization, collision handling, config parsing and validati
 | `assets/sortinghat.ico` | Application icon for the executables (placeholder; replaceable). |
 | `tools/make_icon.py` | Regenerates the placeholder icon using only the standard library. |
 | `build_exe.bat` | One-step PyInstaller build script (console + GUI). |
+| `docs/screenshots/` | README screenshots. |
+| `LICENSE` | MIT license text. |
 | `SortingHat.spec`, `build/`, `dist/` | Generated on first build. Not tracked in git, and safe to delete. |
 
 ## License
 
-MIT.
+Released under the [MIT License](LICENSE).
