@@ -18,6 +18,12 @@ Nothing is ever overwritten, every live run can be undone, and every action can 
 - **System File Filtering**: Automatically ignores dotfiles and OS artefacts like `desktop.ini` and `Thumbs.db`.
 - **No External Dependencies**: Uses only the standard library — `argparse`, `fnmatch`, `shutil`, `pathlib` for the core, and `tkinter`, `threading`, `queue` for the GUI.
 
+## Screenshots
+
+| Interactive terminal menu | Desktop GUI |
+| :---: | :---: |
+| ![SortingHat terminal menu](docs/screenshots/SortingHat-CLI.png) | ![SortingHat desktop GUI](docs/screenshots/SortingHat-GUI.png) |
+
 ## Requirements
 
 - **Python 3.8 or newer** (developed and tested on 3.14). No third-party packages are needed to run the tool.
