@@ -7,6 +7,11 @@ echo Checking for PyInstaller...
 pip install pyinstaller
 
 echo.
+echo Closing any running SortingHat executables (they lock dist\ during a build)...
+taskkill /F /IM SortingHat.exe >nul 2>&1
+taskkill /F /IM SortingHat-GUI.exe >nul 2>&1
+
+echo.
 echo Generating application icon...
 python tools\make_icon.py
 
