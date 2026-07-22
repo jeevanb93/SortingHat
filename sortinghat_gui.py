@@ -70,7 +70,9 @@ class GuiReporter(Reporter):
     def __init__(self, sink: "queue.Queue[Event]") -> None:
         self._sink = sink
 
-    def _put(self, kind: str, **data: object) -> None:
+    def _put(self, kind: str, /, **data: object) -> None:
+        # `kind` is positional-only so an event may legitimately carry a data
+        # field also called "kind" (the `ignored` event does) without clashing.
         self._sink.put(Event(kind, data))
 
     def moved(self, name, category, dest_name, renamed):

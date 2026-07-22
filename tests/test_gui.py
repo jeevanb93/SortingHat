@@ -51,6 +51,37 @@ class TestGuiReporter:
         r = GuiReporter(q)
         assert vars(r) == {"_sink": q}
 
+    def test_ignored_event_carries_kind_without_clashing(self):
+        # Regression: the `ignored` event has a data field named "kind", which must
+        # not collide with _put's own positional parameter (crashed on system files).
+        q: "queue.Queue[Event]" = queue.Queue()
+        GuiReporter(q).ignored("desktop.ini", "system")
+        ev = q.get_nowait()
+        assert ev.kind == "ignored"
+        assert ev.data == {"name": "desktop.ini", "kind": "system"}
+
+    def test_every_reporter_method_enqueues_without_error(self):
+        # Exercise the whole surface so a signature clash can't hide in an untested one.
+        from pathlib import Path
+        from sortinghat import UndoResult
+        q: "queue.Queue[Event]" = queue.Queue()
+        r = GuiReporter(q)
+        r.moved("a", "Documents", "a", False)
+        r.previewed("a", "Documents", "a", False)
+        r.skipped("a", "reason")
+        r.excluded("a")
+        r.ignored("a", "system")
+        r.undo_started(1, "t", False)
+        r.restored("a", Path("a"), False)
+        r.missing("a")
+        r.blocked("a")
+        r.failed("a", "err")
+        r.no_undo_log(Path("."))
+        r.undo_summary(UndoResult())
+        r.progress(1, 2)
+        r.note("hi")
+        assert q.qsize() == 14
+
 
 # ── Controller (worker thread + queue) ────────────────────────────────────────
 
@@ -70,6 +101,19 @@ class TestController:
         assert finished.data["result"].moved == 2
         assert (tmp_path / "doc.pdf").exists()             # dry run: untouched
         assert not (tmp_path / "Documents").exists()
+
+    def test_sort_with_system_file_does_not_crash(self, tmp_path):
+        # A real Downloads folder always has system/hidden files; make sure the
+        # 'ignored' event flows through the queue rather than raising in the worker.
+        self._make_files(tmp_path, ["doc.pdf"])
+        (tmp_path / "desktop.ini").write_text("x")
+        (tmp_path / ".hidden").write_text("x")
+        q: "queue.Queue[Event]" = queue.Queue()
+        Controller(q).run_sort(tmp_path, dry_run=True, ext_map=build_ext_map())
+        events = _drain_until_done(q)
+
+        assert "error" not in _kinds(events)     # the worker did not blow up
+        assert "ignored" in _kinds(events)
 
     def test_sort_moves_files_and_reports_finished(self, tmp_path):
         self._make_files(tmp_path, ["doc.pdf"])
