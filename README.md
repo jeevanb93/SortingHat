@@ -25,9 +25,12 @@ Nothing is ever overwritten, every live run can be undone, and every action can 
 
 ## Screenshots
 
-| Interactive terminal menu | Desktop GUI |
-| :---: | :---: |
-| ![SortingHat terminal menu](docs/screenshots/SortingHat-CLI.png) | ![SortingHat desktop GUI](docs/screenshots/SortingHat-GUI.png) |
+The same tool on both platforms — interactive terminal and desktop GUI:
+
+|  | Terminal | Desktop GUI |
+| :--- | :---: | :---: |
+| **Windows** | ![Windows terminal menu](docs/screenshots/SortingHat-CLI.png) | ![Windows desktop GUI](docs/screenshots/SortingHat-GUI.png) |
+| **macOS** | ![macOS terminal output](docs/screenshots/SortingHat_macOS_CLI.png) | ![macOS desktop GUI](docs/screenshots/SortingHat_macOS_GUI.png) |
 
 ## Download
 
@@ -85,6 +88,75 @@ To remove it later: `pip uninstall sortinghat`.
 **Download** a prebuilt `SortingHat.exe` (terminal) or `SortingHat-GUI.exe` (desktop) from the [Releases page](https://github.com/jeevanb93/SortingHat/releases), or [build them yourself](#building-standalone-executables). Once you have one, double-click it or call it from a terminal like any other command.
 
 > Throughout this README, examples are written as `python sortinghat.py ...`. Substitute `sortinghat ...` or `SortingHat.exe ...` if you installed or built it — the options are identical.
+
+---
+
+## macOS and Linux
+
+SortingHat is pure standard library, so it runs on macOS and Linux with no code changes. Here's the full setup — most of it is optional.
+
+### 1. Run from source (nothing to install)
+
+```bash
+python3 sortinghat.py --dry-run        # preview sorting ~/Downloads
+python3 sortinghat.py ~/Downloads      # sort for real
+python3 sortinghat.py --gui            # desktop window
+```
+
+The CLI works out of the box with any Python 3.8+.
+
+### 2. The GUI needs Tkinter
+
+The graphical interface uses Tkinter, which **Homebrew's Python often ships without**. Check it:
+
+```bash
+python3 -m tkinter        # a small test window should appear
+```
+
+If that errors, install Tk — then the GUI works:
+
+| Platform | Install |
+| :--- | :--- |
+| macOS (Homebrew) | `brew install python-tk` |
+| Debian / Ubuntu | `sudo apt install python3-tk` |
+| Any | Use the [python.org](https://www.python.org/downloads/) installer, which bundles Tk |
+
+Only the GUI needs this; the CLI runs regardless.
+
+### 3. Run the tests or build (use a virtualenv)
+
+macOS's Homebrew/system Python is *externally managed* and blocks global `pip install` — you'll see `error: externally-managed-environment` ([PEP 668](https://peps.python.org/pep-0668/)). A virtual environment sidesteps it cleanly:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install pytest
+python -m pytest
+```
+
+### 4. Build standalone apps
+
+Run the build script **on the target machine** — PyInstaller can't cross-compile, so a macOS `.app` must be built on a Mac. It creates and uses its own `.venv`, so there's nothing to install first:
+
+```bash
+./build_app.sh
+```
+
+| Output | What it is |
+| :--- | :--- |
+| `dist/SortingHat` | Terminal app (macOS/Linux binary). |
+| `dist/SortingHat-GUI.app` | Desktop app on macOS (`dist/SortingHat-GUI` on Linux). |
+
+### 5. First launch on macOS: Gatekeeper
+
+The app is **unsigned**, so macOS blocks it the first time. This is expected, not an error — clear it once:
+
+- **Right-click** `SortingHat-GUI.app` → **Open** → **Open**, or
+- ```bash
+  xattr -dr com.apple.quarantine dist/SortingHat-GUI.app
+  ```
+
+Notarization removes this prompt but needs a paid Apple Developer account and isn't required to run or share the app.
 
 ---
 
@@ -343,35 +415,13 @@ You get two self-contained files you can copy anywhere:
 
 (Running `--gui` from source still opens the window directly, since a normal Python install includes Tkinter.)
 
-### macOS and Linux
-
-The tool is pure standard library, so **running from source works on any OS** with no changes — CLI, menu, and GUI alike:
-
-```bash
-python3 sortinghat.py --dry-run      # preview a sort
-python3 sortinghat.py --gui          # desktop window
-```
-
-Running the tool needs **no packages**. To run the tests or build binaries, use a virtual environment — macOS's Homebrew/system Python blocks global `pip` installs (PEP 668):
-
-```bash
-python3 -m venv .venv && source .venv/bin/activate
-pip install pytest && python -m pytest
-```
-
-To build standalone binaries, run the sibling script **on that machine** (PyInstaller can't cross-compile — a macOS app must be built on a Mac). It creates and uses its own `.venv` automatically:
-
-```bash
-chmod +x build_app.sh && ./build_app.sh
-```
-
-On macOS this produces `dist/SortingHat` (terminal) and `dist/SortingHat-GUI.app` (desktop). The app is **unsigned**, so on first launch **right-click it → Open** once (or run `xattr -dr com.apple.quarantine dist/SortingHat-GUI.app`) — a one-time Gatekeeper prompt, not an error. Notarization for frictionless double-click launching is optional and requires a paid Apple Developer account; it is not needed to run or share the app.
+> **Building on macOS or Linux?** That has its own workflow (`build_app.sh`, which handles the virtualenv, `.icns`, and Gatekeeper) — see the [macOS and Linux](#macos-and-linux) section above.
 
 ### The application icon
 
-Both executables use `assets\sortinghat.ico` for their taskbar and window icon. A placeholder wizard-hat icon is generated by `tools\make_icon.py` (pure standard library — no Pillow needed). To use your own, replace `assets\sortinghat.ico` with any multi-resolution `.ico` (16/32/48/256 px) and rebuild.
+The placeholder wizard-hat icon is generated by `tools/make_icon.py` (pure standard library — no Pillow needed) in the formats each platform needs: `sortinghat.ico` for the Windows taskbar/window and `.exe`, `sortinghat.png` for the macOS/Linux window icon, and a `.icns` derived at build time for the macOS `.app`. To use your own art, replace `assets/sortinghat.png` (and `.ico`) and rebuild.
 
-> The GUI also sets a Windows *AppUserModelID*, so the taskbar shows this icon rather than folding the window under the generic Python launcher.
+> On Windows the GUI also sets an *AppUserModelID*, so the taskbar shows this icon rather than folding the window under the generic Python launcher.
 
 ### Using the .exe
 
