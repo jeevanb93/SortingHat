@@ -1,0 +1,14 @@
+# Normalize line endings across platforms.
+* text=auto
+
+# Shell scripts MUST stay LF, or they break on macOS/Linux with
+# "bad interpreter: /usr/bin/env bash^M".
+*.sh text eol=lf
+
+# Windows batch files stay CRLF.
+*.bat text eol=crlf
+
+# Binary assets — never touch their bytes.
+*.png binary
+*.ico binary
+*.icns binary
