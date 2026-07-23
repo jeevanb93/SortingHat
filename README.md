@@ -352,7 +352,14 @@ python3 sortinghat.py --dry-run      # preview a sort
 python3 sortinghat.py --gui          # desktop window
 ```
 
-To build standalone binaries, run the sibling script **on that machine** (PyInstaller can't cross-compile — a macOS app must be built on a Mac):
+Running the tool needs **no packages**. To run the tests or build binaries, use a virtual environment — macOS's Homebrew/system Python blocks global `pip` installs (PEP 668):
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install pytest && python -m pytest
+```
+
+To build standalone binaries, run the sibling script **on that machine** (PyInstaller can't cross-compile — a macOS app must be built on a Mac). It creates and uses its own `.venv` automatically:
 
 ```bash
 chmod +x build_app.sh && ./build_app.sh

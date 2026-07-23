@@ -6,18 +6,33 @@
 #
 #   chmod +x build_app.sh && ./build_app.sh
 #
-set -euo pipefail
+# -u is intentionally omitted: `source .venv/bin/activate` references unset vars.
+set -eo pipefail
 cd "$(dirname "$0")"
 
-echo "== Checking for PyInstaller =="
-python3 -m pip install --quiet --upgrade pyinstaller
+# Homebrew / system Python on macOS is "externally managed" (PEP 668) and refuses
+# pip installs into it. Build inside a local virtual environment instead — clean,
+# self-contained, and it leaves the system Python untouched.
+echo "== Preparing build environment (.venv) =="
+if [ ! -d .venv ]; then
+  python3 -m venv .venv
+fi
+# shellcheck source=/dev/null
+source .venv/bin/activate
+python -m pip install --quiet --upgrade pip pyinstaller
+
+if ! python -c "import tkinter" >/dev/null 2>&1; then
+  echo "   WARNING: Tkinter is not available in this Python, so the GUI build will fail."
+  echo "            Install it (e.g. 'brew install python-tk') and re-run. The console"
+  echo "            build below will still succeed."
+fi
 
 echo "== Closing any running SortingHat processes =="
 pkill -f "SortingHat-GUI" 2>/dev/null || true
 pkill -f "dist/SortingHat" 2>/dev/null || true
 
 echo "== Generating icons (assets/sortinghat.png + .ico) =="
-python3 tools/make_icon.py
+python tools/make_icon.py
 
 # On macOS, turn the PNG into a proper .icns for the .app bundle icon. Skipped on
 # Linux (no iconutil) — the app still gets its window icon at runtime via iconphoto.
@@ -36,13 +51,13 @@ fi
 
 echo "== Building console executable (SortingHat) =="
 # Exclude Tkinter so the terminal build stays lean; --gui there points to the GUI app.
-python3 -m PyInstaller --onefile --name "SortingHat" \
+python -m PyInstaller --onefile --name "SortingHat" \
   --exclude-module sortinghat_gui --exclude-module tkinter --exclude-module _tkinter \
   "${ICON_ARG[@]}" --noconfirm sortinghat.py
 
 echo "== Building GUI app (SortingHat-GUI) =="
 # NOTE: --add-data uses ':' as the separator on macOS/Linux (';' on Windows).
-python3 -m PyInstaller --onefile --windowed --name "SortingHat-GUI" \
+python -m PyInstaller --onefile --windowed --name "SortingHat-GUI" \
   --add-data "assets/sortinghat.png:assets" \
   "${ICON_ARG[@]}" --noconfirm sortinghat_gui.py
 
