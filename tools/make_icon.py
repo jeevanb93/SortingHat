@@ -94,10 +94,16 @@ def _ico(png: bytes) -> bytes:
 
 
 def main() -> None:
-    out = Path(__file__).resolve().parent.parent / "assets" / "sortinghat.ico"
-    out.parent.mkdir(exist_ok=True)
-    out.write_bytes(_ico(_png(SIZE, SIZE, bytes(_draw()))))
-    print(f"wrote {out} ({out.stat().st_size} bytes)")
+    assets = Path(__file__).resolve().parent.parent / "assets"
+    assets.mkdir(exist_ok=True)
+    png = _png(SIZE, SIZE, bytes(_draw()))
+
+    # PNG for the Tkinter window icon on macOS/Linux (iconphoto), ICO for Windows
+    # (iconbitmap) and the .exe. On macOS the build script converts the PNG to
+    # an .icns for the .app bundle icon.
+    (assets / "sortinghat.png").write_bytes(png)
+    (assets / "sortinghat.ico").write_bytes(_ico(png))
+    print(f"wrote {assets / 'sortinghat.png'} and {assets / 'sortinghat.ico'}")
 
 
 if __name__ == "__main__":

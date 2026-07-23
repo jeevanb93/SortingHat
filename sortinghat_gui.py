@@ -42,7 +42,8 @@ from sortinghat import (
 
 
 APP_ID = "SortingHat.App"          # taskbar identity (see _apply_window_icon)
-ICON_FILE = "assets/sortinghat.ico"
+ICON_ICO = "assets/sortinghat.ico"  # Windows: iconbitmap
+ICON_PNG = "assets/sortinghat.png"  # macOS / Linux: iconphoto
 
 
 def resource_path(relative: str) -> Path:
@@ -208,12 +209,19 @@ class SortingHatApp(tk.Tk):
                 ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_ID)
             except Exception:
                 pass
-        icon = resource_path(ICON_FILE)
-        if icon.exists():
-            try:
-                self.iconbitmap(str(icon))
-            except tk.TclError:
-                pass  # platform without .ico support — window just uses the default icon
+
+        # Windows understands .ico via iconbitmap; macOS/Linux need a PhotoImage
+        # via iconphoto. iconphoto also needs a live reference to the image or Tk
+        # garbage-collects it and the icon vanishes — hence self._icon_image.
+        ico, png = resource_path(ICON_ICO), resource_path(ICON_PNG)
+        try:
+            if sys.platform == "win32" and ico.exists():
+                self.iconbitmap(str(ico))
+            elif png.exists():
+                self._icon_image = tk.PhotoImage(file=str(png))
+                self.iconphoto(True, self._icon_image)
+        except tk.TclError:
+            pass  # no icon support here — window just uses the default icon
 
     # ── layout ──
 
