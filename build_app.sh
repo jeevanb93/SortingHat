@@ -31,8 +31,13 @@ echo "== Closing any running SortingHat processes =="
 pkill -f "SortingHat-GUI" 2>/dev/null || true
 pkill -f "dist/SortingHat" 2>/dev/null || true
 
-echo "== Generating icons (assets/sortinghat.png + .ico) =="
-python tools/make_icon.py
+echo "== Ensuring icons exist =="
+# Only generate if missing. The .png/.ico are committed, and regenerating them
+# just produces different-but-identical bytes (platform zlib differences), which
+# shows up as pointless pending changes. Run tools/make_icon.py by hand to redraw.
+if [ ! -f assets/sortinghat.png ]; then
+  python tools/make_icon.py
+fi
 
 # On macOS, turn the PNG into a proper .icns for the .app bundle icon. Skipped on
 # Linux (no iconutil) — the app still gets its window icon at runtime via iconphoto.

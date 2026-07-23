@@ -3,6 +3,9 @@
 /dist
 *.spec
 
+# Generated on the macOS build from the tracked .png — never committed.
+assets/sortinghat.icns
+
 # Python bytecode
 __pycache__/
 *.py[cod]
